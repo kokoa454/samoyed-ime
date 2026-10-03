@@ -1,0 +1,7 @@
+[workspace]
+members = [
+    "crates/ime_core",
+    "crates/ime_tsf",
+]
+
+resolver = "2"
