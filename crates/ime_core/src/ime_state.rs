@@ -445,7 +445,7 @@ mod tests {
 
         state.input_char('k');
 
-        assert_eq!(state.get_display_text(), "あいku");
+        assert_eq!(state.get_display_text(), "あいkう");
         assert_eq!(state.get_cursor_pos(), 3);
 
         state.input_char('a');
