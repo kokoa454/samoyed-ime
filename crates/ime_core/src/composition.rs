@@ -1,4 +1,5 @@
 /// 未確定文字列とカーソル位置を管理する構造体
+#[derive(Clone, PartialEq, Eq)]
 pub struct Composition {
     content_units: Vec<char>, // 未確定文字列
     cursor_pos: usize, // 未確定文字列のカーソル位置

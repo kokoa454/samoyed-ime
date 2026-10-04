@@ -1,6 +1,7 @@
 use crate::romaji_converter::{convert, RomajiConversionResult};
 
 /// 未確定のローマ字入力を管理する構造体
+#[derive(Clone, PartialEq, Eq)]
 pub struct RomajiInput {
     pending: String, // ひらがなとして確定していないローマ字
 }
@@ -14,10 +15,10 @@ impl RomajiInput {
     }
 
     /// ローマ字を1文字入力する。
-    /// 
+    ///
     /// 引数
     /// * `input`: 入力されたローマ字
-    /// 
+    ///
     /// 戻り値
     /// * `String`: 入力されたローマ字をひらがなに変換した文字列
     pub fn input(&mut self, input: char) -> String {
@@ -46,6 +47,58 @@ impl RomajiInput {
         }
 
         output
+    }
+
+    /// 未変換のローマ字を1文字削除する。
+    ///
+    /// 戻り値
+    /// * `true`: 削除した場合
+    /// * `false`: 未変換文字列が空の場合
+    pub(crate) fn backspace(&mut self) -> bool {
+        self.pending.pop().is_some()
+    }
+
+    /// 未変換のローマ字入力が存在するかを取得する。
+    ///
+    /// 戻り値
+    /// * `true`: 未変換文字列が存在する場合
+    /// * `false`: 未変換文字列が空の場合
+    pub(crate) fn has_pending_input(&self) -> bool {
+        !self.pending.is_empty()
+    }
+
+    /// 未変換のローマ字入力をクリアする。
+    pub(crate) fn clear(&mut self) {
+        self.pending.clear();
+    }
+
+    /// 未変換のローマ字入力を取得する。
+    ///
+    /// 戻り値
+    /// * `&str`: 未変換のローマ字入力
+    pub(crate) fn get_pending_input(&self) -> &str {
+        &self.pending
+    }
+
+    /// 入力文字をローマ字変換で受け付けられるかを判定する。
+    ///
+    /// 引数
+    /// * `input`: 入力文字
+    ///
+    /// 戻り値
+    /// * `true`: 入力を受け付けられる場合
+    /// * `false`: 入力を受け付けない場合
+    pub(crate) fn can_accept_input(&self, input: char) -> bool {
+        let input = if input.is_ascii_alphabetic() {
+            input.to_ascii_lowercase()
+        } else {
+            input
+        };
+
+        !matches!(
+            convert(&input.to_string()),
+            RomajiConversionResult::Invalid
+        )
     }
 }
 
@@ -175,6 +228,8 @@ mod tests {
 
         assert_eq!(input.input('k'), "");
         assert_eq!(input.input('y'), "");
+
+        assert_eq!(input.get_pending_input(), "ky");
     }
 
     #[test]
@@ -310,5 +365,27 @@ mod tests {
         assert_eq!(input.input('n'), "");
         assert_eq!(input.input('n'), "ん");
         assert_eq!(input.input('a'), "あ");
+    }
+
+    // ============================================================
+    // Backspace
+    // ============================================================
+
+    #[test]
+    fn test_backspace_pending() {
+        let mut input = RomajiInput::new();
+
+        assert_eq!(input.input('k'), "");
+        assert_eq!(input.input('y'), "");
+
+        assert_eq!(input.backspace(), true);
+        assert_eq!(input.input('a'), "か");
+    }
+
+    #[test]
+    fn test_backspace_empty_pending() {
+        let mut input = RomajiInput::new();
+
+        assert_eq!(input.backspace(), false);
     }
 }
