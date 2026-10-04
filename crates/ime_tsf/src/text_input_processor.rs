@@ -156,7 +156,10 @@ pub struct SharedState {
 }
 
 impl SharedState {
-    /// TSFのキーボード開閉状態を設定する。
+        /// TSFのキーボード開閉状態を設定し、ローカル状態も同時に更新する。
+    ///
+    /// コンパートメントの更新に失敗した場合はローカル状態も変更しない。
+    /// 両者が食い違うと、Windowsの表示と実際の入力動作が一致しなくなる。
     ///
     /// # 引数
     /// * `state`: TextServiceの共有状態
@@ -164,7 +167,7 @@ impl SharedState {
     ///
     /// # 戻り値
     /// * `Ok(())`: 成功した場合
-    /// * `Err(E_FAIL)`: Client IDが設定されていない場合
+    /// * `Err(E_FAIL)`: Client IDまたはThread Managerが未設定の場合
     pub(crate) fn set_keyboard_open(
         state: &Arc<Mutex<Self>>,
         is_open: bool,
@@ -183,8 +186,7 @@ impl SharedState {
             (thread_mgr, client_id)
         };
 
-        let compartment_mgr: ITfCompartmentMgr =
-            thread_mgr.cast()?;
+        let compartment_mgr: ITfCompartmentMgr = thread_mgr.cast()?;
 
         let compartment = unsafe {
             compartment_mgr.GetCompartment(
@@ -196,11 +198,12 @@ impl SharedState {
             VARIANT::from(if is_open { 1i32 } else { 0i32 });
 
         unsafe {
-            compartment.SetValue(
-                client_id,
-                &value,
-            )?;
+            compartment.SetValue(client_id, &value)?;
         }
+
+        // TSF側の更新が成功したときだけローカル状態を合わせる
+        let mut state = state.lock().unwrap();
+        state.is_open = is_open;
 
         Ok(())
     }

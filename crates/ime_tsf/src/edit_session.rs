@@ -13,6 +13,7 @@ use crate::text_input_processor::SharedState;
 use crate::logging::log;
 
 /// EditSessionで実行する操作
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EditAction {
     InputChar(char), // ローマ字を入力
     Backspace, // カーソルの直前の文字を削除
@@ -23,6 +24,7 @@ pub enum EditAction {
     MoveCursorToTail, // カーソルを末尾に移動
     Commit, // 現在のCompositionを確定
     Clear, // 現在のCompositionを削除
+    SetOpen(bool) // IMEの開閉状態を変更
 }
 
 /// Composition終了通知Sink
@@ -188,6 +190,11 @@ impl ITfEditSession_Impl for SamoyedIMEEditSession_Impl {
                 // 現在のCompositionを削除
                 EditAction::Clear => {
                     self.clear(ec)
+                }
+
+                // IMEの開閉状態を変更
+                EditAction::SetOpen(is_open) => {
+                    self.set_open(ec, *is_open)
                 }
             }
         }
@@ -558,16 +565,13 @@ impl SamoyedIMEEditSession {
 
     /// テキストを確定する。
     ///
-    /// # Arguments
-    /// * `ec` - EditContext
+    /// # 引数
+    /// * `ec`: EditContext
     ///
-    /// # Returns
-    /// * `Ok(())` - Success
-    /// * `Err(E_FAIL)` - Failure
-    unsafe fn commit(
-        &self,
-        ec: u32,
-    ) -> WinResult<()> {
+    /// # 戻り値
+    /// * `Ok(())`: 成功した場合
+    /// * `Err(_)`: 失敗した場合
+    unsafe fn commit(&self, ec: u32) -> WinResult<()> {
         let composition = {
             let state = self.state.lock().unwrap();
             state.composition.clone()
@@ -575,14 +579,14 @@ impl SamoyedIMEEditSession {
 
         if let Some(composition) = composition {
             unsafe {
-                composition.EndComposition(ec)?
-            };
-
-            let mut state = self.state.lock().unwrap();
-
-            state.composition = None;
-            state.ime_state.clear();
+                composition.EndComposition(ec)?;
+            }
         }
+
+        // Compositionが無い場合でも未変換ローマ字は破棄
+        let mut state = self.state.lock().unwrap();
+        state.composition = None;
+        state.ime_state.clear();
 
         Ok(())
     }
@@ -605,28 +609,40 @@ impl SamoyedIMEEditSession {
         };
 
         if let Some(composition) = composition {
-            let range = unsafe {
-                composition.GetRange()?
-            };
+            let range = unsafe { composition.GetRange()? };
 
-            unsafe {
-                range.SetText(
-                    ec,
-                    0,
-                    &[],
-                )?
-            };
+            unsafe { range.SetText(ec, 0, &[],)? };
 
-            unsafe {
-                composition.EndComposition(ec)?
-            };
+            unsafe { composition.EndComposition(ec)? };
         }
 
         let mut state = self.state.lock().unwrap();
 
         state.composition = None;
         state.ime_state.clear();
-        state.eaten_keys.clear();
+
+        Ok(())
+    }
+
+    /// IMEの開閉状態を変更する。
+    ///
+    /// # 引数
+    /// * `ec`: EditContext
+    /// * `is_open`: 新しい開閉状態
+    ///
+    /// # 戻り値
+    /// * `Ok(())`: 成功した場合
+    /// * `Err(_)`: 確定またはコンパートメント更新に失敗した場合
+    unsafe fn set_open(&self, ec: u32, is_open: bool) -> WinResult<()> {
+        // 閉じる場合は未確定文字列を確定してから状態を切り替える
+        if !is_open {
+            unsafe { self.commit(ec)? };
+        }
+
+        // コンパートメントと is_open を同時に更新する
+        SharedState::set_keyboard_open(&self.state, is_open)?;
+
+        log(&format!("[SamoyedIME] SetOpen: is_open={}", is_open));
 
         Ok(())
     }

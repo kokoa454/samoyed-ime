@@ -5,7 +5,7 @@ use windows::core::{implement, BOOL, GUID, Ref, Result as WinResult};
 use windows::Win32::Foundation::{LPARAM, WPARAM};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetKeyState, GetKeyboardLayout, GetKeyboardState, ToUnicodeEx,
-    VK_BACK, VK_CONTROL, VK_DELETE, VK_DOWN, VK_END, VK_ESCAPE, VK_HOME, VK_LEFT, VK_LWIN, VK_MENU, VK_RETURN, VK_RIGHT, VK_RWIN, VK_SHIFT, VK_UP, VK_KANJI,
+    VK_BACK, VK_CONTROL, VK_DELETE, VK_END, VK_ESCAPE, VK_HOME, VK_LEFT, VK_LWIN, VK_MENU, VK_RETURN, VK_RIGHT, VK_RWIN, VK_SHIFT, VK_KANJI,
 };
 use windows::Win32::UI::TextServices::{ITfContext, ITfKeyEventSink, ITfKeyEventSink_Impl};
 
@@ -84,95 +84,42 @@ impl KeyEventSink {
             return None;
         }
 
-        match vk {
-            x if x == VK_BACK.0 => {
-                if ime_state.has_active_input() {
-                    Some(EditAction::Backspace)
-                } else {
-                    None
-                }
-            }
+        route_edit_key(vk, state.is_open, ime_state.has_active_input())
+    }
 
-            x if x == VK_DELETE.0 => {
-                if ime_state.has_composition()
-                    && !ime_state.has_pending_input()
-                    && ime_state.get_cursor_pos()
-                        < ime_state.get_display_text().chars().count()
-                {
-                    Some(EditAction::Delete)
-                } else {
-                    None
-                }
-            }
+    /// IMEの開閉状態を切り替える。
+    ///
+    /// # 引数
+    /// * `pic`: Context
+    fn toggle_open(&self, pic: Ref<'_, ITfContext>) {
+        let target = {
+            let state = self.state.lock().unwrap();
+            !state.is_open
+        };
 
-            x if x == VK_LEFT.0 => {
-                if ime_state.has_composition()
-                    && !ime_state.has_pending_input()
-                    && ime_state.get_cursor_pos() > 0
-                {
-                    Some(EditAction::MoveCursorLeft)
-                } else {
-                    None
-                }
-            }
+        let Some(context) = pic.as_ref() else {
+            // Contextが無い場合はTSFを操作できない
+            log("[SamoyedIME] toggle_open: no context, state-only update");
+            let mut state = self.state.lock().unwrap();
+            state.ime_state.clear();
+            state.is_open = target;
+            return;
+        };
 
-            x if x == VK_RIGHT.0 => {
-                if ime_state.has_composition()
-                    && !ime_state.has_pending_input()
-                    && ime_state.get_cursor_pos()
-                        < ime_state.get_display_text().chars().count()
-                {
-                    Some(EditAction::MoveCursorRight)
-                } else {
-                    None
-                }
-            }
-
-            x if x == VK_HOME.0 => {
-                if ime_state.has_composition()
-                    && !ime_state.has_pending_input()
-                    && ime_state.get_cursor_pos() > 0
-                {
-                    Some(EditAction::MoveCursorToHead)
-                } else {
-                    None
-                }
-            }
-
-            x if x == VK_END.0 => {
-                if ime_state.has_composition()
-                    && !ime_state.has_pending_input()
-                    && ime_state.get_cursor_pos()
-                        < ime_state.get_display_text().chars().count()
-                {
-                    Some(EditAction::MoveCursorToTail)
-                } else {
-                    None
-                }
-            }
-
-            x if x == VK_RETURN.0 => {
-                if ime_state.has_active_input() {
-                    Some(EditAction::Commit)
-                } else {
-                    None
-                }
-            }
-
-            x if x == VK_ESCAPE.0 => {
-                if ime_state.has_active_input() {
-                    Some(EditAction::Clear)
-                } else {
-                    None
-                }
-            }
-
-            x if x == VK_UP.0 || x == VK_DOWN.0 => {
-                None
-            }
-
-            _ => None,
+        if let Err(e) = SharedState::request_edit_session(
+            self.state.clone(),
+            context,
+            EditAction::SetOpen(target),
+        ) {
+            // EditSessionを要求できなかった場合は状態を変えない
+            log(&format!(
+                "[SamoyedIME] toggle_open: RequestEditSession failed: {:?}",
+                e
+            ));
+            return;
         }
+
+        log(&format!("[SamoyedIME] Toggled is_open={}", target));
     }
 }
 
@@ -201,32 +148,12 @@ impl ITfKeyEventSink_Impl for KeyEventSink_Impl {
 
         if is_toggle_key(vk) {
             if self.should_toggle_now() {
-                let (new_state, needs_commit) = {
-                    let mut state = self.state.lock().unwrap();
-                    state.is_open = !state.is_open;
-                    let needs_commit = !state.is_open && state.ime_state.has_active_input();
-                    (state.is_open, needs_commit)
-                };
-
-                if needs_commit {
-                    if let Some(context) = pic.as_ref() {
-                        let _ = SharedState::request_edit_session(
-                            self.state.clone(),
-                            context,
-                            EditAction::Commit,
-                        );
-                    }
-                }
-
-                let _ = SharedState::set_keyboard_open(&self.state, new_state);
-                log(&format!("[SamoyedIME] Toggled is_open={}", new_state));
+                self.toggle_open(pic);
             } else {
                 log("[SamoyedIME] Toggle key ignored (debounced)");
             }
-
             let mut state = self.state.lock().unwrap();
             state.eaten_keys.insert(vk);
-
             return Ok(BOOL(1));
         }
 
@@ -238,11 +165,17 @@ impl ITfKeyEventSink_Impl for KeyEventSink_Impl {
             return Ok(BOOL(0));
         };
 
-        SharedState::request_edit_session(
+        if let Err(e) = SharedState::request_edit_session(
             self.state.clone(),
             context,
             action,
-        )?;
+        ) {
+            log(&format!(
+                "[SamoyedIME] RequestEditSession failed: {:?}",
+                e
+            ));
+            return Ok(BOOL(1));
+        }
 
         let mut state = self.state.lock().unwrap();
         state.eaten_keys.insert(vk);
@@ -276,29 +209,9 @@ impl ITfKeyEventSink_Impl for KeyEventSink_Impl {
                 let mut state = self.state.lock().unwrap();
                 state.eaten_keys.remove(&vk)
             };
-
             if !eaten && self.should_toggle_now() {
-                let (new_state, needs_commit) = {
-                    let mut state = self.state.lock().unwrap();
-                    state.is_open = !state.is_open;
-                    let needs_commit = !state.is_open && state.ime_state.has_active_input();
-                    (state.is_open, needs_commit)
-                };
-
-                if needs_commit {
-                    if let Some(context) = pic.as_ref() {
-                        let _ = SharedState::request_edit_session(
-                            self.state.clone(),
-                            context,
-                            EditAction::Commit,
-                        );
-                    }
-                }
-
-                let _ = SharedState::set_keyboard_open(&self.state, new_state);
-                log(&format!("[SamoyedIME] Toggled (via KeyUp fallback) is_open={}", new_state));
+                self.toggle_open(pic);
             }
-
             return Ok(BOOL(1));
         }
 
@@ -547,4 +460,93 @@ fn has_blocking_modifier() -> bool {
 /// * `false`: IMEの開閉を切り替えないキーの場合
 fn is_toggle_key(vk: u16) -> bool {
     vk == VK_KANJI.0 || vk == 0xF3 || vk == 0xF4
+}
+
+/// キーをIMEが処理すべきかを判定する。
+///
+/// TSFやWindows APIに依存しない純粋関数にしておくことで、
+/// キー割り当ての仕様を単体テストで固定できる。
+///
+/// # 引数
+/// * `vk`: Virtual Key code
+/// * `is_open`: IMEがONかどうか
+/// * `has_active_input`: 未確定文字列または未変換ローマ字があるか
+///
+/// # 戻り値
+/// * `Some(EditAction)`: IMEが処理するキーの場合
+/// * `None`: アプリへ渡すキーの場合
+pub(crate) fn route_edit_key(
+    vk: u16,
+    is_open: bool,
+    has_active_input: bool,
+) -> Option<EditAction> {
+    // IMEがOFFのときは何もしない
+    if !is_open {
+        return None;
+    }
+
+    // 未確定文字列が無いときはアプリの操作を邪魔しない
+    if !has_active_input {
+        return None;
+    }
+
+    // 未確定文字列がある間は、編集キーをアプリへ渡してはならない。
+    // アプリ側のテキストはCompositionそのものなので、
+    // アプリに処理させると内部状態と表示が食い違う。
+    // 実際に変化するかどうかは ime_core 側が no-op で吸収する。
+    match vk {
+        x if x == VK_BACK.0 => Some(EditAction::Backspace),
+        x if x == VK_DELETE.0 => Some(EditAction::Delete),
+        x if x == VK_LEFT.0 => Some(EditAction::MoveCursorLeft),
+        x if x == VK_RIGHT.0 => Some(EditAction::MoveCursorRight),
+        x if x == VK_HOME.0 => Some(EditAction::MoveCursorToHead),
+        x if x == VK_END.0 => Some(EditAction::MoveCursorToTail),
+        x if x == VK_RETURN.0 => Some(EditAction::Commit),
+        x if x == VK_ESCAPE.0 => Some(EditAction::Clear),
+        _ => None,
+    }
+}
+
+
+/// テスト
+#[cfg(test)]
+mod tests {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{VK_F1, VK_UP};
+
+use super::*;
+
+    #[test]
+    fn test_can_accept_input() {
+        assert_eq!(route_edit_key(VK_DELETE.0, false, true), None);
+        assert_eq!(route_edit_key(VK_RETURN.0, false, true), None);
+    }
+
+    #[test]
+    fn test_no_pending_input() {
+        assert_eq!(route_edit_key(VK_DELETE.0, true, false), None);
+        assert_eq!(route_edit_key(VK_LEFT.0, true, false), None);
+        assert_eq!(route_edit_key(VK_BACK.0, true, false), None);
+    }
+
+    #[test]
+    fn test_delete_key_with_pending() {
+        assert_eq!(
+            route_edit_key(VK_DELETE.0, true, true),
+            Some(EditAction::Delete)
+        );
+    }
+
+    #[test]
+    fn test_cursor_keys_with_pending() {
+        assert_eq!(route_edit_key(VK_LEFT.0, true, true), Some(EditAction::MoveCursorLeft));
+        assert_eq!(route_edit_key(VK_RIGHT.0, true, true), Some(EditAction::MoveCursorRight));
+        assert_eq!(route_edit_key(VK_HOME.0, true, true), Some(EditAction::MoveCursorToHead));
+        assert_eq!(route_edit_key(VK_END.0, true, true), Some(EditAction::MoveCursorToTail));
+    }
+
+    #[test]
+    fn test_other_keys_not_handled() {
+        assert_eq!(route_edit_key(VK_UP.0, true, true), None);
+        assert_eq!(route_edit_key(VK_F1.0, true, true), None);
+    }
 }
