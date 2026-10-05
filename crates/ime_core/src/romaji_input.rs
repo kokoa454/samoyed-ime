@@ -22,9 +22,14 @@ impl RomajiInput {
     /// 戻り値
     /// * `String`: 入力されたローマ字をひらがなに変換した文字列
     pub fn input(&mut self, input: char) -> String {
-        self.pending.push(input);
-
         let mut output = String::new();
+
+        // 前回までに「変換できない」と判定したローマ字を確定
+        while matches!(convert(&self.pending), RomajiConversionResult::Invalid) {
+            output.push(self.pending.remove(0));
+        }
+
+        self.pending.push(input);
 
         loop {
             match convert(&self.pending) {
@@ -34,14 +39,9 @@ impl RomajiInput {
                     self.pending.drain(..consumed);
                 }
 
-                // 変換するローマ字が足りない場合
-                RomajiConversionResult::Pending => {
+                // 変換に必要な文字が足りない場合と、変換できない場合は保留
+                RomajiConversionResult::Pending | RomajiConversionResult::Invalid => {
                     break;
-                }
-
-                // 変換できないローマ字の場合
-                RomajiConversionResult::Invalid => {
-                    output.push(self.pending.remove(0));
                 }
             }
         }
@@ -316,13 +316,10 @@ mod tests {
     fn test_invalid_input_does_not_stuck() {
         let mut input = RomajiInput::new();
 
-        // "qx" は無効
-        // q をそのまま出力して、x は次の入力に持ち越す
         assert_eq!(input.input('q'), "");
-        assert_eq!(input.input('x'), "q");
+        assert_eq!(input.input('x'), "");
 
-        // 残った "x" に "a" が続くと "ぁ" になる
-        assert_eq!(input.input('a'), "ぁ");
+        assert_eq!(input.input('a'), "qぁ");
     }
 
     #[test]
@@ -330,10 +327,32 @@ mod tests {
         let mut input = RomajiInput::new();
 
         assert_eq!(input.input('q'), "");
-        assert_eq!(input.input('z'), "q");
+        assert_eq!(input.input('z'), "");
 
-        // 残った z を使って次の入力を続ける
-        assert_eq!(input.input('a'), "ざ");
+        assert_eq!(input.input('a'), "qざ");
+    }
+
+    #[test]
+    fn test_invalid_pair_is_kept_as_pending() {
+        let mut input = RomajiInput::new();
+
+        assert_eq!(input.input('k'), "");
+        assert_eq!(input.input('l'), "");
+
+        assert_eq!(input.get_pending_input(), "kl");
+    }
+
+    #[test]
+    fn test_backspace_after_invalid_pair_keeps_leading_char() {
+        let mut input = RomajiInput::new();
+
+        assert_eq!(input.input('k'), "");
+        assert_eq!(input.input('l'), "");
+
+        assert_eq!(input.backspace(), true);
+        assert_eq!(input.get_pending_input(), "k");
+
+        assert_eq!(input.input('e'), "け");
     }
 
     // ============================================================

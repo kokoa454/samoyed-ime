@@ -468,4 +468,29 @@ mod tests {
 
         assert_eq!(composition_to_string(&state), "わたしはがくせいです");
     }
+
+    // ============================================================
+    // 無効なローマ字入力
+    // ============================================================
+
+    #[test]
+    fn test_backspace_after_invalid_romaji_pair_removes_only_pending_char() {
+        let mut state = ImeState::new();
+
+        for ch in "soreda".chars() {
+            state.input_char(ch);
+        }
+        state.input_char('k');
+        state.input_char('l');
+
+        assert_eq!(state.get_display_text(), "それだkl");
+
+        state.backspace();
+
+        assert_eq!(state.get_display_text(), "それだk");
+
+        state.input_char('e');
+
+        assert_eq!(state.get_display_text(), "それだけ");
+    }
 }
