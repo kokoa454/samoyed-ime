@@ -7,7 +7,7 @@ use windows::Win32::UI::TextServices::{
     ITfComposition, ITfCompositionSink, ITfCompositionSink_Impl, ITfContext, ITfContextComposition, ITfEditSession, ITfEditSession_Impl,
     TF_ANCHOR_END, TF_ANCHOR_START, TF_SELECTION,
 };
-use ime_core::ImeState;
+use ime_core::{ImeState, ModeCommand};
 
 use crate::text_input_processor::SharedState;
 use crate::logging::log;
@@ -24,7 +24,8 @@ pub enum EditAction {
     MoveCursorToTail, // カーソルを末尾に移動
     Commit, // 現在のCompositionを確定
     Clear, // 現在のCompositionを削除
-    SetOpen(bool) // IMEの開閉状態を変更
+    SetOpen(bool), // IMEの開閉状態を変更
+    ApplyModeCommand(ModeCommand), // モードコマンドを適用
 }
 
 /// Composition終了通知Sink
@@ -64,11 +65,10 @@ impl ITfCompositionSink_Impl
 
         let mut state = self.state.lock().unwrap();
 
-        state.composition = None;
-        state.ime_state.clear();
-
-        // eaten_keysはキーイベントの生存期間を管理するため、
-        // Composition終了ではクリアしない
+        if state.composition.is_some() {
+            state.composition = None;
+            state.ime_state.clear();
+        }
 
         Ok(())
     }
@@ -195,6 +195,16 @@ impl ITfEditSession_Impl for SamoyedIMEEditSession_Impl {
                 // IMEの開閉状態を変更
                 EditAction::SetOpen(is_open) => {
                     self.set_open(ec, *is_open)
+                }
+
+                // モードコマンドを適用
+                EditAction::ApplyModeCommand(command) => {
+                    self.update_state_and_text(
+                        ec,
+                        |ime_state| {
+                            ime_state.apply_mode_command(*command);
+                        },
+                    )
                 }
             }
         }
@@ -446,21 +456,10 @@ impl SamoyedIMEEditSession {
         ec: u32,
         composition: &ITfComposition,
     ) -> WinResult<()> {
-        let range = unsafe {
-            composition.GetRange()?
-        };
+        let range = unsafe { composition.GetRange()? };
 
-        unsafe {
-            range.SetText(
-                ec,
-                0,
-                &[],
-            )?
-        };
-
-        unsafe {
-            composition.EndComposition(ec)?
-        };
+        unsafe { range.SetText(ec, 0, &[],)? };
+        unsafe { composition.EndComposition(ec)? };
 
         Ok(())
     }
@@ -612,7 +611,6 @@ impl SamoyedIMEEditSession {
             let range = unsafe { composition.GetRange()? };
 
             unsafe { range.SetText(ec, 0, &[],)? };
-
             unsafe { composition.EndComposition(ec)? };
         }
 

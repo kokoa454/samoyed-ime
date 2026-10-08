@@ -5,8 +5,13 @@ use windows::core::{implement, BOOL, GUID, Ref, Result as WinResult};
 use windows::Win32::Foundation::{LPARAM, WPARAM};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetKeyState, GetKeyboardLayout, GetKeyboardState, ToUnicodeEx,
-    VK_BACK, VK_CONTROL, VK_DELETE, VK_END, VK_ESCAPE, VK_HOME, VK_LEFT, VK_LWIN, VK_MENU, VK_RETURN, VK_RIGHT, VK_RWIN, VK_SHIFT, VK_KANJI,
+    VK_BACK, VK_CONTROL, VK_DELETE, VK_END, VK_ESCAPE, VK_HOME, VK_LEFT,
+    VK_LWIN, VK_MENU, VK_RETURN, VK_RIGHT, VK_RWIN, VK_SHIFT, VK_KANJI,
+    VK_KANA, VK_NONCONVERT,
+    VK_DBE_ALPHANUMERIC, VK_DBE_HIRAGANA, VK_DBE_KATAKANA,
 };
+
+use ime_core::ModeCommand;
 use windows::Win32::UI::TextServices::{ITfContext, ITfKeyEventSink, ITfKeyEventSink_Impl};
 
 use crate::logging::log;
@@ -72,11 +77,9 @@ impl KeyEventSink {
 
         let ime_state = &state.ime_state;
 
-        // 文字入力
-        if let Some(ch) = vk_to_input_char(vk, lparam) {
-            if ime_state.can_input_char(ch) {
-                return Some(EditAction::InputChar(ch));
-            }
+        // モード遷移キーをチェック
+        if let Some(action) = route_edit_key(vk, state.is_open, ime_state.has_active_input()) {
+            return Some(action);
         }
 
         // 文字入力以外でShiftを含む修飾キーはIMEで処理しない
@@ -84,7 +87,14 @@ impl KeyEventSink {
             return None;
         }
 
-        route_edit_key(vk, state.is_open, ime_state.has_active_input())
+        // 文字入力
+        if let Some(ch) = vk_to_input_char(vk, lparam) {
+            if ime_state.can_input_char(ch) {
+                return Some(EditAction::InputChar(ch));
+            }
+        }
+
+        None
     }
 
     /// IMEの開閉状態を切り替える。
@@ -121,6 +131,12 @@ impl KeyEventSink {
 
         log(&format!("[SamoyedIME] Toggled is_open={}", target));
     }
+
+    /// LangBarItemButtonの表示を更新する。
+    fn update_language_bar_item(&self) {
+        // TODO: ITfLangBarItemButton 実装後に有効化
+        // 現在の input_mode を読んで、入力インジケーターを更新する
+    }
 }
 
 /// ITfKeyEventSinkの実装
@@ -130,7 +146,7 @@ impl ITfKeyEventSink_Impl for KeyEventSink_Impl {
     /// 引数
     /// * `pic`: Context
     /// * `wparam`: WPARAM
-    /// * `_lparam`: LPARAM
+    /// * `lparam`: LPARAM
     ///
     /// 戻り値
     /// * `Ok(BOOL(0))`: キーを処理しなかった場合
@@ -145,6 +161,36 @@ impl ITfKeyEventSink_Impl for KeyEventSink_Impl {
         let vk = wparam.0 as u16;
 
         log(&format!("[SamoyedIME] OnKeyDown: VK=0x{:X}", vk));
+
+        // モード切替キーとIME ONキーの処理
+        {
+            let state = self.state.lock().unwrap();
+            if state.is_open {
+                if let Some(command) = route_mode_key(vk, true) {
+                    drop(state);
+                    let Some(context) = pic.as_ref() else {
+                        return Ok(BOOL(1));
+                    };
+                    if let Err(e) = SharedState::request_edit_session(
+                        self.state.clone(),
+                        context,
+                        EditAction::ApplyModeCommand(command),
+                    ) {
+                        log(&format!("[SamoyedIME] RequestEditSession failed: {:?}", e));
+                        return Ok(BOOL(1));
+                    }
+                    let mut state = self.state.lock().unwrap();
+                    state.eaten_keys.insert(vk);
+                    return Ok(BOOL(1));
+                }
+            } else if is_ime_on_key(vk) {
+                drop(state);
+                if self.should_toggle_now() {
+                    self.toggle_open(pic);
+                }
+                return Ok(BOOL(1));
+            }
+        }
 
         if is_toggle_key(vk) {
             if self.should_toggle_now() {
@@ -170,10 +216,7 @@ impl ITfKeyEventSink_Impl for KeyEventSink_Impl {
             context,
             action,
         ) {
-            log(&format!(
-                "[SamoyedIME] RequestEditSession failed: {:?}",
-                e
-            ));
+            log(&format!("[SamoyedIME] RequestEditSession failed: {:?}", e));
             return Ok(BOOL(1));
         }
 
@@ -194,7 +237,7 @@ impl ITfKeyEventSink_Impl for KeyEventSink_Impl {
     /// * `Ok(BOOL(0))`: キーを処理しなかった場合
     /// * `Ok(BOOL(1))`: キーを処理した場合
     /// * `Err(E_UNEXPECTED)`: 予期しないエラーが発生した場合
-    fn OnKeyUp(
+        fn OnKeyUp(
         &self,
         pic: Ref<'_, ITfContext>,
         wparam: WPARAM,
@@ -203,6 +246,38 @@ impl ITfKeyEventSink_Impl for KeyEventSink_Impl {
         let vk = wparam.0 as u16;
 
         log(&format!("[SamoyedIME] OnKeyUp: VK=0x{:X}", vk));
+
+        // キーが押されたときに処理したキーを削除
+        let eaten = {
+            let mut state = self.state.lock().unwrap();
+            state.eaten_keys.remove(&vk)
+        };
+
+        if eaten {
+            return Ok(BOOL(1));
+        }
+
+        // IMEがOFFのときのひらがな／カタカナ／英数キーはIMEをON
+        if is_ime_on_key(vk) {
+            if self.should_toggle_now() {
+                self.toggle_open(pic);
+            }
+            return Ok(BOOL(1));
+        }
+
+        // モード切替キー
+        let mode_command = {
+            let state = self.state.lock().unwrap();
+            route_mode_key(vk, state.is_open)
+        };
+
+        if let Some(command) = mode_command {
+            let mut state = self.state.lock().unwrap();
+            state.ime_state.apply_mode_command(command);
+            drop(state);
+            self.update_language_bar_item();
+            return Ok(BOOL(1));
+        }
 
         if is_toggle_key(vk) {
             let eaten = {
@@ -252,6 +327,13 @@ impl ITfKeyEventSink_Impl for KeyEventSink_Impl {
             return Ok(BOOL(1));
         }
 
+        {
+            let state = self.state.lock().unwrap();
+            if state.is_open && route_mode_key(vk, true).is_some() {
+                return Ok(BOOL(1));
+            }
+        }
+
         if self.get_key_action(vk, lparam).is_some() {
             return Ok(BOOL(1));
         }
@@ -281,6 +363,14 @@ impl ITfKeyEventSink_Impl for KeyEventSink_Impl {
         let state = self.state.lock().unwrap();
 
         if state.eaten_keys.contains(&vk) {
+            return Ok(BOOL(1));
+        }
+
+        if state.is_open {
+            if route_mode_key(vk, true).is_some() {
+                return Ok(BOOL(1));
+            }
+        } else if is_ime_on_key(vk) {
             return Ok(BOOL(1));
         }
 
@@ -507,6 +597,44 @@ pub(crate) fn route_edit_key(
     }
 }
 
+/// VKコードをモード切替コマンドへ変換する。
+///
+/// 引数
+/// * `vk`: Virtual Key code
+/// * `is_open`: IMEがONかどうか
+///
+/// 戻り値
+/// * `Some(ModeCommand)`: モード切替コマンド
+/// * `None`: モード切替ではないキーの場合
+pub(crate) fn route_mode_key(vk: u16, is_open: bool) -> Option<ModeCommand> {
+    if !is_open {
+        return None;
+    }
+
+    match vk {
+        x if x == VK_KANA.0 || x == VK_DBE_HIRAGANA.0 => Some(ModeCommand::Hiragana),
+        x if x == VK_DBE_KATAKANA.0 => Some(ModeCommand::FullWidthKatakana),
+        x if x == VK_NONCONVERT.0 => Some(ModeCommand::SwitchKanaType),
+        x if x == VK_DBE_ALPHANUMERIC.0 => Some(ModeCommand::ToggleAlphanumeric),
+        _ => None,
+    }
+}
+
+/// IMEがOFFのときに、IMEをONにするキーかどうか。
+///
+/// 引数
+/// * `vk`: Virtual Key code
+///
+/// 戻り値
+/// * `true`: IMEをONにするキーの場合
+/// * `false`: IMEをONにしないキーの場合
+pub(crate) fn is_ime_on_key(vk: u16) -> bool {
+    vk == VK_KANA.0
+        || vk == VK_DBE_HIRAGANA.0
+        || vk == VK_DBE_KATAKANA.0
+        || vk == VK_DBE_ALPHANUMERIC.0
+}
+
 
 /// テスト
 #[cfg(test)]
@@ -548,5 +676,27 @@ use super::*;
     fn test_other_keys_not_handled() {
         assert_eq!(route_edit_key(VK_UP.0, true, true), None);
         assert_eq!(route_edit_key(VK_F1.0, true, true), None);
+    }
+
+    #[test]
+    fn test_route_mode_key() {
+        assert_eq!(route_mode_key(VK_KANA.0, true), Some(ModeCommand::Hiragana));
+        assert_eq!(route_mode_key(VK_KANA.0, false), None);
+        assert_eq!(
+            route_mode_key(VK_NONCONVERT.0, true),
+            Some(ModeCommand::SwitchKanaType)
+        );
+        assert_eq!(
+            route_mode_key(VK_DBE_ALPHANUMERIC.0, true),
+            Some(ModeCommand::ToggleAlphanumeric)
+        );
+        assert_eq!(route_mode_key(VK_F1.0, true), None);
+    }
+
+    #[test]
+    fn test_is_ime_on_key() {
+        assert!(is_ime_on_key(VK_KANA.0));
+        assert!(is_ime_on_key(VK_DBE_ALPHANUMERIC.0));
+        assert!(!is_ime_on_key(VK_F1.0));
     }
 }

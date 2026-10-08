@@ -1,4 +1,12 @@
 use crate::composition::Composition;
+use crate::mode_converter::{
+    full_width_alphanumeric_to_half_width_alphanumeric,
+    full_width_katakana_to_hiragana,
+    half_width_alphanumeric_to_full_width_alphanumeric,
+    half_width_katakana_to_full_width_katakana,
+    hiragana_to_full_width_katakana,
+    hiragana_to_half_width_katakana,
+};
 use crate::romaji_input::RomajiInput;
 
 /// 入力モード
@@ -9,6 +17,15 @@ pub enum InputMode {
     HalfWidthKatakana, // 半角カタカナ
     FullWidthAlphanumeric, // 全角英数字
     HalfWidthAlphanumeric, // 半角英数字
+}
+
+/// 入力モード切替コマンド
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModeCommand {
+    Hiragana, // ひらがなキー
+    FullWidthKatakana, // Shift+ひらがな / カタカナキー
+    SwitchKanaType, // 無変換キー
+    ToggleAlphanumeric, // 英数キー
 }
 
 /// IMEの状態を管理する構造体
@@ -29,6 +46,99 @@ impl ImeState {
         }
     }
 
+    /// 現在の入力モードを取得する。
+    ///
+    /// 戻り値
+    /// * `InputMode`: 現在の入力モード
+    pub fn get_input_mode(&self) -> InputMode {
+        self.input_mode
+    }
+
+    /// 現在の入力モードを設定する。
+    ///
+    /// 引数
+    /// * `mode`: 新しい入力モード
+    pub fn set_input_mode(&mut self, mode: InputMode) {
+        self.input_mode = mode;
+    }
+
+    /// モード切替コマンドを適用する。
+    ///
+    /// 引数
+    /// * `command`: モード切替コマンド
+    pub fn apply_mode_command(&mut self, command: ModeCommand) {
+        match command {
+            // ひらがなキー: ひらがなモードへ
+            ModeCommand::Hiragana => self.input_mode = InputMode::Hiragana,
+
+            // カタカナキー: 全角カタカナモードへ
+            ModeCommand::FullWidthKatakana => {
+                self.input_mode = InputMode::FullWidthKatakana
+            }
+
+            // 無変換キー: かな種別を巡回
+            ModeCommand::SwitchKanaType => self.switch_kana_type(),
+
+            // 英数キー: ひらがな ⇔ 半角英数
+            ModeCommand::ToggleAlphanumeric => self.toggle_alphanumeric_mode(),
+        }
+    }
+
+    /// かな種別を巡回させる（無変換キー）。
+    ///
+    /// 引数
+    /// * `mode`: 新しい入力モード
+    fn switch_kana_type(&mut self) {
+        self.input_mode = match self.input_mode {
+            InputMode::Hiragana => InputMode::FullWidthKatakana,
+            InputMode::FullWidthKatakana => InputMode::HalfWidthKatakana,
+            InputMode::HalfWidthKatakana => InputMode::Hiragana,
+            InputMode::FullWidthAlphanumeric | InputMode::HalfWidthAlphanumeric => {
+                self.input_mode
+            }
+        };
+    }
+
+    /// ひらがなモードと半角英数モードをトグルする。
+    ///
+    /// 引数
+    /// * `mode`: 新しい入力モード
+    fn toggle_alphanumeric_mode(&mut self) {
+        self.input_mode = match self.input_mode {
+            InputMode::Hiragana => InputMode::HalfWidthAlphanumeric,
+            _ => InputMode::Hiragana,
+        };
+    }
+
+    /// モードに応じて文字列を変換する。
+    ///
+    /// 引数
+    /// * `text`: 変換する文字列
+    ///
+    /// 戻り値
+    /// * `String`: 変換後の文字列
+    fn convert_text(&self, text: &str) -> String {
+        //半角カタカナを全角カタカナに、ひらがなに変換
+        let normalized = {
+            let full_width_kana = half_width_katakana_to_full_width_katakana(text);
+            let hiragana = full_width_katakana_to_hiragana(&full_width_kana);
+            half_width_alphanumeric_to_full_width_alphanumeric(&hiragana)
+        };
+
+        match self.input_mode {
+            // ひらがな
+            InputMode::Hiragana => normalized,
+            // 全角カタカナ
+            InputMode::FullWidthKatakana => hiragana_to_full_width_katakana(&normalized),
+            // 半角カタカナ
+            InputMode::HalfWidthKatakana => hiragana_to_half_width_katakana(&normalized),
+            // 全角英数
+            InputMode::FullWidthAlphanumeric => normalized.clone(),
+            // 半角英数
+            InputMode::HalfWidthAlphanumeric => full_width_alphanumeric_to_half_width_alphanumeric(&normalized),
+        }
+    }
+
     /// 文字を入力する。
     ///
     /// 引数
@@ -37,13 +147,22 @@ impl ImeState {
     /// 戻り値
     /// * `String`: 変換後の文字
     pub fn input_char(&mut self, input: char) -> String {
-        let kana = self.romaji_input.input(input);
+        let raw = match self.input_mode {
+            // 英数モードはローマ字変換せず、そのまま入れる
+            InputMode::FullWidthAlphanumeric | InputMode::HalfWidthAlphanumeric => {
+                input.to_string()
+            }
+            // かな系モードはローマ字変換する
+            _ => self.romaji_input.input(input),
+        };
 
-        for ch in kana.chars() {
+        let converted = self.convert_text(&raw);
+
+        for ch in converted.chars() {
             self.composition.insert(ch);
         }
 
-        kana
+        converted
     }
 
     /// 現在の表示文字列を取得する。
@@ -60,15 +179,16 @@ impl ImeState {
 
         let mut text = String::new();
 
-        for ch in &content_units[..cursor_pos] {
-            text.push(*ch);
-        }
+        // カーソル位置までの確定文字をモード変換し直す
+        let before_cursor: String = content_units[..cursor_pos].iter().collect();
+        text.push_str(&self.convert_text(&before_cursor));
 
-        text.push_str(pending);
+        // 未確定ローマ字もモードに応じて変換して表示する
+        text.push_str(&self.convert_text(pending));
 
-        for ch in &content_units[cursor_pos..] {
-            text.push(*ch);
-        }
+        // カーソル位置以降の確定文字をモード変換し直す
+        let after_cursor: String = content_units[cursor_pos..].iter().collect();
+        text.push_str(&self.convert_text(&after_cursor));
 
         text
     }
@@ -106,7 +226,10 @@ impl ImeState {
     /// 戻り値
     /// * `bool`: 入力を受け付けられる場合はtrue
     pub fn can_input_char(&self, input: char) -> bool {
-        self.romaji_input.can_accept_input(input)
+        match self.input_mode {
+            InputMode::FullWidthAlphanumeric | InputMode::HalfWidthAlphanumeric => true,
+            _ => input.is_ascii_alphabetic() || self.romaji_input.can_accept_input(input),
+        }
     }
 
     /// 入力中の文字が存在するかどうかを取得する。
@@ -414,7 +537,7 @@ mod tests {
 
         state.input_char('k');
 
-        assert_eq!(state.get_display_text(), "k");
+        assert_eq!(state.get_display_text(), "ｋ");
         assert_eq!(state.get_cursor_pos(), 1);
     }
 
@@ -445,7 +568,7 @@ mod tests {
 
         state.input_char('k');
 
-        assert_eq!(state.get_display_text(), "あいkう");
+        assert_eq!(state.get_display_text(), "あいｋう");
         assert_eq!(state.get_cursor_pos(), 3);
 
         state.input_char('a');
@@ -483,14 +606,148 @@ mod tests {
         state.input_char('k');
         state.input_char('l');
 
-        assert_eq!(state.get_display_text(), "それだkl");
+        assert_eq!(state.get_display_text(), "それだｋｌ");
 
         state.backspace();
 
-        assert_eq!(state.get_display_text(), "それだk");
+        assert_eq!(state.get_display_text(), "それだｋ");
 
         state.input_char('e');
 
         assert_eq!(state.get_display_text(), "それだけ");
+    }
+
+    #[test]
+    fn test_invalid_input_does_not_stuck() {
+        let mut state = ImeState::new();
+        state.input_char('q');
+        state.input_char('x');
+        assert_eq!(state.input_char('a'), "ｑぁ");
+    }
+
+    #[test]
+    fn test_invalid_input_can_recover() {
+        let mut state = ImeState::new();
+        state.input_char('q');
+        state.input_char('z');
+        assert_eq!(state.input_char('a'), "ｑざ");
+    }
+
+    // ============================================================
+    // 入力モード切替
+    // ============================================================
+
+    #[test]
+    fn test_switch_kana_type_cycles_kana() {
+        let mut state = ImeState::new();
+
+        state.apply_mode_command(ModeCommand::SwitchKanaType);
+        assert_eq!(state.get_input_mode(), InputMode::FullWidthKatakana);
+
+        state.apply_mode_command(ModeCommand::SwitchKanaType);
+        assert_eq!(state.get_input_mode(), InputMode::HalfWidthKatakana);
+
+        state.apply_mode_command(ModeCommand::SwitchKanaType);
+        assert_eq!(state.get_input_mode(), InputMode::Hiragana);
+    }
+
+    #[test]
+    fn test_switch_kana_type_does_nothing_with_active_input() {
+        let mut state = ImeState::new();
+
+        state.input_char('k'); // 未確定ローマ字あり
+
+        state.apply_mode_command(ModeCommand::SwitchKanaType);
+
+        assert_eq!(state.get_input_mode(), InputMode::Hiragana);
+    }
+
+    #[test]
+    fn test_switch_kana_type_keeps_alphanumeric() {
+        let mut state = ImeState::new();
+        state.set_input_mode(InputMode::HalfWidthAlphanumeric);
+
+        state.apply_mode_command(ModeCommand::SwitchKanaType);
+
+        assert_eq!(state.get_input_mode(), InputMode::HalfWidthAlphanumeric);
+    }
+
+    #[test]
+    fn test_toggle_alphanumeric_from_hiragana() {
+        let mut state = ImeState::new();
+
+        state.apply_mode_command(ModeCommand::ToggleAlphanumeric);
+        assert_eq!(state.get_input_mode(), InputMode::HalfWidthAlphanumeric);
+
+        state.apply_mode_command(ModeCommand::ToggleAlphanumeric);
+        assert_eq!(state.get_input_mode(), InputMode::Hiragana);
+    }
+
+    #[test]
+    fn test_toggle_alphanumeric_from_katakana_returns_to_hiragana() {
+        let mut state = ImeState::new();
+
+        state.apply_mode_command(ModeCommand::FullWidthKatakana);
+        state.apply_mode_command(ModeCommand::ToggleAlphanumeric);
+
+        // カタカナから英数を押すとひらがなに戻る（Mozc の ToggleInputMode と同じ）
+        assert_eq!(state.get_input_mode(), InputMode::Hiragana);
+    }
+
+    #[test]
+    fn test_hiragana_command_sets_hiragana() {
+        let mut state = ImeState::new();
+        state.set_input_mode(InputMode::FullWidthKatakana);
+
+        state.apply_mode_command(ModeCommand::Hiragana);
+
+        assert_eq!(state.get_input_mode(), InputMode::Hiragana);
+    }
+
+    // ============================================================
+    // モード別の文字変換
+    // ============================================================
+
+    #[test]
+    fn test_pending_is_full_width_in_full_width_katakana() {
+        let mut state = ImeState::new();
+        state.set_input_mode(InputMode::FullWidthKatakana);
+
+        state.input_char('k');
+
+        assert_eq!(state.get_display_text(), "ｋ");
+    }
+
+    #[test]
+    fn test_pending_is_half_width_in_half_width_katakana() {
+        let mut state = ImeState::new();
+        state.set_input_mode(InputMode::HalfWidthKatakana);
+
+        state.input_char('k');
+
+        // 半角カタカナモードは半角英数と同じ見た目になる
+        assert_eq!(state.get_display_text(), "k");
+    }
+
+    #[test]
+    fn test_half_width_katakana_converts_voiced_kana() {
+        let mut state = ImeState::new();
+        state.set_input_mode(InputMode::HalfWidthKatakana);
+
+        for ch in "ga".chars() {
+            state.input_char(ch);
+        }
+
+        assert_eq!(composition_to_string(&state), "ｶﾞ");
+    }
+
+    #[test]
+    fn test_full_width_alphanumeric_mode() {
+        let mut state = ImeState::new();
+        state.set_input_mode(InputMode::FullWidthAlphanumeric);
+
+        state.input_char('a');
+
+        assert_eq!(composition_to_string(&state), "ａ");
     }
 }

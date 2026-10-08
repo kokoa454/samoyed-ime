@@ -51,20 +51,12 @@ pub fn convert(input: &str) -> RomajiConversionResult {
     }
 
     // 変換候補の検索（最長一致）
-    let mut best_match: Option<(&str, &str)> = None;
+    let best_match = ROMAJI_TABLE
+        .iter()
+        .filter(|&&(romaji, _)| input.starts_with(romaji))
+        .max_by_key(|&&(romaji, _)| romaji.len());
 
-    for &(romaji, kana) in ROMAJI_TABLE {
-        if input.starts_with(romaji) {
-            match best_match {
-                Some((best_romaji, _)) if best_romaji.len() >= romaji.len() => {}
-                _ => {
-                    best_match = Some((romaji, kana));
-                }
-            }
-        }
-    }
-
-    if let Some((romaji, kana)) = best_match {
+    if let Some(&(romaji, kana)) = best_match {
         return RomajiConversionResult::Converted {
             kana: kana.to_string(),
             consumed: romaji.len(),
@@ -74,7 +66,7 @@ pub fn convert(input: &str) -> RomajiConversionResult {
     // まだ長くなれば変換できる可能性があるか
     if ROMAJI_TABLE
         .iter()
-        .any(|(romaji, _)| romaji.starts_with(input))
+        .any(|&(romaji, _)| romaji.starts_with(input))
     {
         return RomajiConversionResult::Pending;
     }
@@ -90,43 +82,25 @@ pub fn convert(input: &str) -> RomajiConversionResult {
 /// 戻り値
 /// * `Option<usize>`: 「ん」に変換した場合に消費したローマ字の文字数
 fn convert_n(input: &str) -> Option<usize> {
-    let chars: Vec<char> = input.chars().collect();
+    let mut chars = input.chars();
+    let c1 = chars.next()?; // 1文字目（無ければ None を返して終了）
+    let c2 = chars.next();  // 2文字目（無ければ None）
 
-    // 「nn」 → 「ん」
-    if chars.len() >= 2 && chars[0] == ROMAJI_N && chars[1] == ROMAJI_N {
-        return Some(2);
-    }
-
-    // 「xn」 → 「ん」
-    if chars.len() >= 2 && chars[0] == ROMAJI_X && chars[1] == ROMAJI_N {
-        return Some(2);
-    }
-
-    // 「n'」 → 「ん」
-    if chars.len() >= 2 && chars[0] == ROMAJI_N && chars[1] == ROMAJI_APOSTROPHE {
-        return Some(2);
-    }
-
-    // 「n」1文字だけでは「ん」にしない
-    if chars.len() == 1 {
-        return None;
-    }
-
-    // 「n」 + 母音 / y はまだ「ん」にしない
-    if chars[0] == ROMAJI_N
-        && (VOWELS.contains(&chars[1]) || chars[1] == ROMAJI_Y)
+    // nn, xn, n' のパターン
+    if (c1 == ROMAJI_N && c2 == Some(ROMAJI_N)) ||
+       (c1 == ROMAJI_X && c2 == Some(ROMAJI_N)) ||
+       (c1 == ROMAJI_N && c2 == Some(ROMAJI_APOSTROPHE)) 
     {
-        return None;
+        return Some(2);
     }
 
-    // 「n」 + 子音 → 「ん」
-    if chars[0] == ROMAJI_N && CONSONANTS.contains(chars[1]) {
-        return Some(1);
-    }
-
-    // 「n」 + その他 → 「ん」
-    if chars[0] == ROMAJI_N {
-        return Some(1);
+    // 1文字目が 'n' の場合の判定
+    if c1 == ROMAJI_N {
+        match c2 {
+            None => return None, // "n" 1文字だけ
+            Some(c) if VOWELS.contains(&c) || c == ROMAJI_Y => return None, // na, ni, nya などは保留
+            _ => return Some(1), // それ以外 (子音や記号) は「ん」に確定
+        }
     }
 
     None
@@ -140,17 +114,19 @@ fn convert_n(input: &str) -> Option<usize> {
 /// 戻り値
 /// * `bool`: 小さい「つ」に変換できるかどうか
 fn is_sokuon(input: &str) -> bool {
-    let chars: Vec<char> = input.chars().collect();
+    let mut chars = input.chars();
+    let c1 = match chars.next() {
+        Some(c) => c,
+        None => return false,
+    };
+    let c2 = match chars.next() {
+        Some(c) => c,
+        None => return false,
+    };
 
-    // 2文字未満は小さい「つ」にしない
-    if chars.len() < 2 {
-        return false;
-    }
-
-    // 最初の2文字が同じ子音
-    chars[0] == chars[1] && CONSONANTS.contains(chars[0]) && chars[0] != ROMAJI_N
+    // 最初の2文字が同じ子音か (ただし 'n' は除く)
+    c1 == c2 && c1 != ROMAJI_N && CONSONANTS.contains(c1)
 }
-
 
 /// かな変換に関するテスト
 #[cfg(test)]
@@ -649,8 +625,8 @@ mod tests {
             ("}", "｝"),
             ("<", "＜"),
             (">", "＞"),
-            ("/", "／"),
-            ("\\", "＼"),
+            ("/", "・"),
+            ("\\", "￥"),
             ("|", "｜"),
             ("@", "＠"),
             ("#", "＃"),
