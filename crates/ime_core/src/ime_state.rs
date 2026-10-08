@@ -77,7 +77,11 @@ impl ImeState {
             }
 
             // 無変換キー: かな種別を巡回
-            ModeCommand::SwitchKanaType => self.switch_kana_type(),
+            ModeCommand::SwitchKanaType => {
+                if !self.has_pending_input() {
+                    self.switch_kana_type();
+                }
+            }
 
             // 英数キー: ひらがな ⇔ 半角英数
             ModeCommand::ToggleAlphanumeric => self.toggle_alphanumeric_mode(),
@@ -85,9 +89,6 @@ impl ImeState {
     }
 
     /// かな種別を巡回させる（無変換キー）。
-    ///
-    /// 引数
-    /// * `mode`: 新しい入力モード
     fn switch_kana_type(&mut self) {
         self.input_mode = match self.input_mode {
             InputMode::Hiragana => InputMode::FullWidthKatakana,
@@ -100,9 +101,6 @@ impl ImeState {
     }
 
     /// ひらがなモードと半角英数モードをトグルする。
-    ///
-    /// 引数
-    /// * `mode`: 新しい入力モード
     fn toggle_alphanumeric_mode(&mut self) {
         self.input_mode = match self.input_mode {
             InputMode::Hiragana => InputMode::HalfWidthAlphanumeric,
