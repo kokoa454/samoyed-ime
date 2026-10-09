@@ -1,4 +1,5 @@
-use crate::romaji_table::ROMAJI_TABLE;
+use crate::hiragana_table::HIRAGANA_TABLE;
+
 
 const VOWELS: [char; 5] = ['a', 'i', 'u', 'e', 'o']; // 母音
 const CONSONANTS: &str = "bcdfghjklmpqrstvwxyz"; // 「n」以外の子音
@@ -9,6 +10,7 @@ const ROMAJI_X: char = 'x'; // 「x」
 const ROMAJI_APOSTROPHE: char = '\''; // 「'」
 const KANA_N: &str = "ん"; // 「ん」
 const KANA_SMALL_TSU: &str = "っ"; // 「っ」
+
 
 /// ローマ字入力の変換結果
 #[derive(Debug, PartialEq, Eq)]
@@ -51,7 +53,7 @@ pub fn convert(input: &str) -> RomajiConversionResult {
     }
 
     // 変換候補の検索（最長一致）
-    let best_match = ROMAJI_TABLE
+    let best_match = HIRAGANA_TABLE
         .iter()
         .filter(|&&(romaji, _)| input.starts_with(romaji))
         .max_by_key(|&&(romaji, _)| romaji.len());
@@ -64,7 +66,7 @@ pub fn convert(input: &str) -> RomajiConversionResult {
     }
 
     // まだ長くなれば変換できる可能性があるか
-    if ROMAJI_TABLE
+    if HIRAGANA_TABLE
         .iter()
         .any(|&(romaji, _)| romaji.starts_with(input))
     {
@@ -127,6 +129,7 @@ fn is_sokuon(input: &str) -> bool {
     // 最初の2文字が同じ子音か (ただし 'n' は除く)
     c1 == c2 && c1 != ROMAJI_N && CONSONANTS.contains(c1)
 }
+
 
 /// かな変換に関するテスト
 #[cfg(test)]

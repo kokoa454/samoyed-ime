@@ -1,4 +1,7 @@
 use crate::half_width_katakana_table::HALF_WIDTH_KATAKANA_TABLE;
+use crate::romaji_input::RomajiInput;
+use crate::romaji_table::ROMAJI_TABLE;
+
 
 /// 半角英数字を全角英数字に変換する。
 ///
@@ -135,9 +138,13 @@ pub fn half_width_katakana_to_full_width_katakana(text: &str) -> String {
                 }
             }
             _ => {
+                // half が厳密に1文字 かつ その文字が ch に一致する場合のみマッチ
                 HALF_WIDTH_KATAKANA_TABLE.iter()
                     .find_map(|&(full, half)| {
-                        if half.chars().next() == Some(ch) {
+                        let mut half_chars = half.chars();
+                        let first = half_chars.next();
+                        let is_single = half_chars.next().is_none();
+                        if is_single && first == Some(ch) {
                             Some(full)
                         } else {
                             None
@@ -150,4 +157,144 @@ pub fn half_width_katakana_to_full_width_katakana(text: &str) -> String {
     }
 
     result
+}
+
+/// ひらがなをローマ字（半角英数）に変換する。
+///
+/// # 引数
+/// * `text`: 変換する文字列
+///
+/// # 戻り値
+/// * `String`: 変換後のローマ字文字列
+pub fn hiragana_to_romaji(text: &str) -> String {
+    let mut result = String::new();
+    let chars: Vec<char> = text.chars().collect();
+    let mut i = 0;
+
+    while i < chars.len() {
+        if chars[i] == 'っ' {
+            if i + 1 < chars.len() {
+                let next_two: String = chars[i + 1..].iter().take(2).collect();
+                let next_one: String = chars[i + 1..].iter().take(1).collect();
+
+                let next_romaji = ROMAJI_TABLE
+                    .iter()
+                    .find(|&&(kana, _)| kana == next_two)
+                    .or_else(|| {
+                        ROMAJI_TABLE
+                            .iter()
+                            .find(|&&(kana, _)| kana == next_one)
+                    })
+                    .map(|&(_, romaji)| romaji);
+
+                if let Some(romaji) = next_romaji {
+                    let first = romaji.chars().next().unwrap_or('x');
+                    if first.is_ascii_alphabetic() && !"aeiou".contains(first) {
+                        let sokuon_char = if romaji.starts_with("ch") { 't' } else { first };
+                        result.push(sokuon_char);
+                        i += 1;
+                        continue;
+                    }
+                }
+            }
+            result.push_str("xtsu");
+            i += 1;
+            continue;
+        }
+
+        // 2文字マッチを試す
+        if i + 1 < chars.len() {
+            let two_chars: String = chars[i..i + 2].iter().collect();
+            if let Some(&(_, romaji)) = ROMAJI_TABLE.iter().find(|&&(kana, _)| kana == two_chars) {
+                result.push_str(romaji);
+                i += 2;
+                continue;
+            }
+        }
+
+        // 1文字マッチを試す
+        let one_char: String = chars[i..i + 1].iter().collect();
+        if let Some(&(_, romaji)) = ROMAJI_TABLE.iter().find(|&&(kana, _)| kana == one_char) {
+            result.push_str(romaji);
+            i += 1;
+            continue;
+        }
+
+        // マッチしない文字（全角英数なら半角化、その他はそのまま）
+        let ch = chars[i];
+        result.push(to_half_width_alphanumeric_char(ch));
+        i += 1;
+    }
+
+    result
+}
+
+/// ローマ字（半角英数）をひらがなに変換する。
+///
+/// # 引数
+/// * `text`: 変換する文字列
+///
+/// # 戻り値
+/// * `String`: 変換後のひらがな文字列
+pub fn romaji_to_hiragana(text: &str) -> String {
+    let mut romaji_input = RomajiInput::new();
+    let mut result = String::new();
+
+    for ch in text.chars() {
+        let ch_lower = ch.to_ascii_lowercase();
+        if ch_lower.is_ascii_alphabetic() {
+            result.push_str(&romaji_input.input(ch_lower));
+        } else {
+            let pending = romaji_input.get_pending_input();
+            if pending == "n" {
+                result.push('ん');
+            } else {
+                result.push_str(pending);
+            }
+            romaji_input.clear();
+            result.push(ch);
+        }
+    }
+
+    let pending = romaji_input.get_pending_input();
+    if pending == "n" {
+        result.push('ん');
+    } else {
+        result.push_str(pending);
+    }
+
+    result
+}
+
+
+/// テスト
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_hiragana_to_romaji_basic() {
+        assert_eq!(hiragana_to_romaji("ああああ"), "aaaa");
+        assert_eq!(hiragana_to_romaji("かきくけこ"), "kakikukeko");
+        assert_eq!(hiragana_to_romaji("さくら"), "sakura");
+        assert_eq!(hiragana_to_romaji("とうきょう"), "toukyou");
+        assert_eq!(hiragana_to_romaji("がっこう"), "gakkou");
+        assert_eq!(hiragana_to_romaji("にほん"), "nihon");
+    }
+
+    #[test]
+    fn test_romaji_to_hiragana_basic() {
+        assert_eq!(romaji_to_hiragana("aaaa"), "ああああ");
+        assert_eq!(romaji_to_hiragana("kakikukeko"), "かきくけこ");
+        assert_eq!(romaji_to_hiragana("sakura"), "さくら");
+        assert_eq!(romaji_to_hiragana("toukyou"), "とうきょう");
+        assert_eq!(romaji_to_hiragana("gakkou"), "がっこう");
+        assert_eq!(romaji_to_hiragana("nihon"), "にほん");
+    }
+
+    #[test]
+    fn test_bidirectional_conversion() {
+        assert_eq!(romaji_to_hiragana(&hiragana_to_romaji("ああああ")), "ああああ");
+        assert_eq!(hiragana_to_romaji(&romaji_to_hiragana("aaaa")), "aaaa");
+    }
 }

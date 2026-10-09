@@ -13,6 +13,10 @@ if (-not $principal.IsInRole(
     throw "Please run PowerShell as Administrator."
 }
 
+if (-not [Environment]::Is64BitProcess) {
+    throw "Please run 64-bit PowerShell."
+}
+
 
 # ============================================================
 # 設定
@@ -24,8 +28,22 @@ $profileGuid = "{d75a0971-4669-49ea-8ffe-42dc31386891}"
 # 日本語
 $langId = 0x0411
 
-# Keyboard TIP
+# カテゴリ GUID
 $keyboardCategory = "{34745C63-B2F0-4784-8B67-5E12C8701A31}"
+$inputModeCategory = "{CCF05DD7-4A87-11D7-A6E2-00065B84435C}"
+$systemTrayCategory = "{25504FB4-7BAB-4BC1-9C69-CF81890F0EF5}"
+
+# プロファイルアイコン
+$iconPathCandidate = Join-Path $PSScriptRoot "samoyed-ime.ico"
+
+if (-not (Test-Path -LiteralPath $iconPathCandidate -PathType Leaf)) {
+    throw "samoyed-ime.ico was not found. Place it next to register.ps1."
+}
+
+$iconPath = (Resolve-Path -LiteralPath $iconPathCandidate).Path
+$iconIndex = 0
+
+Write-Host "Icon: $iconPath"
 
 
 # ============================================================
@@ -40,8 +58,8 @@ $dllCandidates = @(
 $dllPath = $null
 
 foreach ($candidate in $dllCandidates) {
-    if (Test-Path $candidate) {
-        $dllPath = (Resolve-Path $candidate).Path
+    if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+        $dllPath = (Resolve-Path -LiteralPath $candidate).Path
         break
     }
 }
@@ -54,10 +72,10 @@ Write-Host "DLL: $dllPath"
 
 
 # ============================================================
-# COMサーバーを登録
+# COMサーバーをシステム（HKLM）へ登録
 # ============================================================
 
-$clsidKey = "HKCU:\Software\Classes\CLSID\$clsid"
+$clsidKey = "HKLM:\Software\Classes\CLSID\$clsid"
 $inprocKey = "$clsidKey\InprocServer32"
 
 New-Item `
@@ -85,7 +103,7 @@ Set-ItemProperty `
     -Name "ThreadingModel" `
     -Value "Apartment"
 
-Write-Host "Registered COM server."
+Write-Host "Registered COM server to HKLM."
 
 
 # ============================================================
@@ -98,10 +116,6 @@ using System.Runtime.InteropServices;
 
 public static class SamoyedTsfRegistration
 {
-    // ========================================================
-    // ITfInputProcessorProfileMgr
-    // ========================================================
-
     [ComImport]
     [Guid("71C6E74C-0F28-11D8-A82A-00065B84435C")]
     [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
@@ -180,11 +194,6 @@ public static class SamoyedTsfRegistration
         );
     }
 
-
-    // ========================================================
-    // ITfCategoryMgr
-    // ========================================================
-
     [ComImport]
     [Guid("C3ACEFB5-F69D-4905-938F-FCADCF4BE830")]
     [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
@@ -197,11 +206,6 @@ public static class SamoyedTsfRegistration
             ref Guid rguid
         );
     }
-
-
-    // ========================================================
-    // HRESULT
-    // ========================================================
 
     private static void CheckHResult(
         int hr,
@@ -219,18 +223,23 @@ public static class SamoyedTsfRegistration
         }
     }
 
-
-    // ========================================================
-    // TSF Profile登録
-    // ========================================================
-
     public static void RegisterProfile(
         string clsidText,
         string profileGuidText,
         ushort langId,
-        string description
+        string description,
+        string iconFilePath,
+        uint iconIndex
     )
     {
+        if (String.IsNullOrWhiteSpace(iconFilePath))
+        {
+            throw new ArgumentException(
+                "Icon file path must not be empty.",
+                "iconFilePath"
+            );
+        }
+
         Guid clsid = new Guid(clsidText);
         Guid profileGuid = new Guid(profileGuidText);
 
@@ -261,12 +270,12 @@ public static class SamoyedTsfRegistration
                 ref profileGuid,
                 description,
                 (uint)description.Length,
-                null,
-                0,
-                0,
+                iconFilePath,
+                (uint)iconFilePath.Length,
+                iconIndex,
                 IntPtr.Zero,
                 0,
-                false,
+                true,
                 0
             );
 
@@ -281,12 +290,7 @@ public static class SamoyedTsfRegistration
         }
     }
 
-
-    // ========================================================
-    // Keyboard TIPカテゴリ登録
-    // ========================================================
-
-    public static void RegisterKeyboardCategory(
+    public static void RegisterCategory(
         string clsidText,
         string categoryText
     )
@@ -346,22 +350,34 @@ public static class SamoyedTsfRegistration
     $clsid,
     $profileGuid,
     [uint16]$langId,
-    "Samoyed IME"
+    "Samoyed IME",
+    $iconPath,
+    [uint32]$iconIndex
 )
 
 Write-Host "Registered TSF profile."
 
 
 # ============================================================
-# Keyboard TIPとして登録
+# Keyboard TIP および Input Mode Component として登録
 # ============================================================
 
-[SamoyedTsfRegistration]::RegisterKeyboardCategory(
+[SamoyedTsfRegistration]::RegisterCategory(
     $clsid,
     $keyboardCategory
 )
 
-Write-Host "Registered keyboard TIP category."
+[SamoyedTsfRegistration]::RegisterCategory(
+    $clsid,
+    $inputModeCategory
+)
+
+[SamoyedTsfRegistration]::RegisterCategory(
+    $clsid,
+    $systemTrayCategory
+)
+
+Write-Host "Registered keyboard TIP, input mode and system tray categories."
 
 Write-Host ""
 Write-Host "Samoyed IME system registration completed."

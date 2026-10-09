@@ -8,19 +8,23 @@ use windows::Win32::Foundation::E_FAIL;
 use windows::Win32::System::Variant::VARIANT;
 use windows::Win32::UI::TextServices::{
     GUID_COMPARTMENT_KEYBOARD_OPENCLOSE, ITfCompartmentMgr, ITfComposition, ITfContext,
-    ITfEditSession, ITfKeyEventSink, ITfKeystrokeMgr, ITfTextInputProcessor,
-    ITfTextInputProcessor_Impl, ITfThreadMgr, TF_ES_ASYNCDONTCARE, TF_ES_READWRITE,
+    ITfEditSession, ITfKeyEventSink, ITfKeystrokeMgr, ITfLangBarItem, ITfLangBarItemMgr,
+    ITfLangBarItemSink, ITfTextInputProcessor, ITfTextInputProcessor_Impl,
+    ITfThreadMgr, TF_ES_ASYNCDONTCARE, TF_ES_READWRITE,
 };
 
 use crate::edit_session::{EditAction, SamoyedIMEEditSession};
 use crate::key_event_sink::KeyEventSink;
+use crate::lang_bar::SamoyedLangBarItem;
 use crate::logging::log;
 use crate::LIVE_OBJECT_COUNT;
+
 
 /// TSF Text Service本体
 #[implement(ITfTextInputProcessor)]
 pub struct TextService {
-    state: Arc<Mutex<SharedState>>,
+    state: Arc<Mutex<SharedState>>, // TextServiceが共有する状態
+    lang_bar_item: Mutex<Option<ITfLangBarItem>>, // LangBarItemへのポインタ
 }
 
 impl TextService {
@@ -39,7 +43,9 @@ impl TextService {
                 composition: None,
                 eaten_keys: HashSet::new(),
                 is_open: true,
+                lang_bar_item_sink: None,
             })),
+            lang_bar_item: Mutex::new(None),
         }
     }
 }
@@ -97,11 +103,25 @@ impl ITfTextInputProcessor_Impl for TextService_Impl {
         SharedState::set_keyboard_open(&self.state, true)?;
 
         // KeyEventSinkを生成
-        let sink: ITfKeyEventSink =
-            KeyEventSink::new(self.state.clone()).into();
+        let sink: ITfKeyEventSink = KeyEventSink::new(self.state.clone()).into();
 
         // KeyEventSinkをTSFへ登録
         unsafe { keystroke_mgr.AdviseKeyEventSink(tid, &sink, true)?; }
+
+        // LangBarItemを登録する
+        let samoyed_lang_bar = SamoyedLangBarItem::new(self.state.clone());
+        let lang_bar_item_unk: ITfLangBarItem = samoyed_lang_bar.into();
+
+        if let Ok(lang_bar_item_mgr) = thread_mgr.cast::<ITfLangBarItemMgr>() {
+            unsafe {
+                if let Err(e) = lang_bar_item_mgr.AddItem(&lang_bar_item_unk) {
+                    log(&format!("[SamoyedIME] AddItem failed: {:?}", e));
+                } else {
+                    *self.lang_bar_item.lock().unwrap() = Some(lang_bar_item_unk);
+                    log("[SamoyedIME] SamoyedLangBarItem registered successfully");
+                }
+            }
+        }
 
         log("[SamoyedIME] KeyEventSink::Advised");
 
@@ -115,6 +135,20 @@ impl ITfTextInputProcessor_Impl for TextService_Impl {
     /// * `Err(E_UNEXPECTED)`: 失敗した場合
     fn Deactivate(&self) -> WinResult<()> {
         log("[SamoyedIME] TextService::Deactivate");
+
+        // LangBarItemをTSFから削除
+        let thread_mgr = {
+            let state = self.state.lock().unwrap();
+            state.thread_mgr.clone()
+        };
+
+        if let Some(lang_bar_item) = self.lang_bar_item.lock().unwrap().take() {
+            if let Some(thread_mgr) = &thread_mgr {
+                if let Ok(lang_bar_item_mgr) = thread_mgr.cast::<ITfLangBarItemMgr>() {
+                    let _ = unsafe { lang_bar_item_mgr.RemoveItem(&lang_bar_item) };
+                }
+            }
+        }
 
         // 状態をクリア
         let (client_id, keystroke_mgr) = {
@@ -153,10 +187,11 @@ pub struct SharedState {
     pub composition: Option<ITfComposition>, // 変換中のコンポジション
     pub eaten_keys: HashSet<u16>, // 入力済みのキー
     pub is_open: bool, // キーボードが開いているかどうか
+    pub lang_bar_item_sink: Option<ITfLangBarItemSink>, // LangBarItem
 }
 
 impl SharedState {
-        /// TSFのキーボード開閉状態を設定し、ローカル状態も同時に更新する。
+    /// TSFのキーボード開閉状態を設定し、ローカル状態も同時に更新する。
     ///
     /// コンパートメントの更新に失敗した場合はローカル状態も変更しない。
     /// 両者が食い違うと、Windowsの表示と実際の入力動作が一致しなくなる。
@@ -194,8 +229,7 @@ impl SharedState {
             )?
         };
 
-        let value =
-            VARIANT::from(if is_open { 1i32 } else { 0i32 });
+        let value = VARIANT::from(if is_open { 1i32 } else { 0i32 });
 
         unsafe {
             compartment.SetValue(client_id, &value)?;
@@ -257,5 +291,25 @@ impl SharedState {
         hr_session.ok()?;
 
         Ok(())
+    }
+
+    /// 言語バーの表示更新通知をOS（TSF）へ送る。
+    ///
+    /// # 引数
+    /// * `state`: TextServiceの共有状態
+    pub(crate) fn notify_lang_bar_update(state: &Arc<Mutex<Self>>) {
+        let state = state.lock().unwrap();
+        if let Some(sink) = state.lang_bar_item_sink.as_ref() {
+            const TF_LBI_ICON: u32 = 2;
+            const TF_LBI_TEXT: u32 = 4;
+            const TF_LBI_TOOLTIP: u32 = 8;
+            const TF_LBI_STATUS: u32 = 1;
+
+            if let Err(e) = unsafe {
+                sink.OnUpdate(TF_LBI_STATUS | TF_LBI_ICON | TF_LBI_TEXT | TF_LBI_TOOLTIP)
+            } {
+                log(&format!("[SamoyedIME] OnUpdate failed: {:?}", e));
+            }
+        }
     }
 }

@@ -1,5 +1,6 @@
 use crate::romaji_converter::{convert, RomajiConversionResult};
 
+
 /// 未確定のローマ字入力を管理する構造体
 #[derive(Clone, PartialEq, Eq)]
 pub struct RomajiInput {
@@ -101,6 +102,7 @@ impl RomajiInput {
         )
     }
 }
+
 
 /// テスト
 #[cfg(test)]

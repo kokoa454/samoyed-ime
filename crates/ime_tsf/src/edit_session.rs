@@ -7,10 +7,11 @@ use windows::Win32::UI::TextServices::{
     ITfComposition, ITfCompositionSink, ITfCompositionSink_Impl, ITfContext, ITfContextComposition, ITfEditSession, ITfEditSession_Impl,
     TF_ANCHOR_END, TF_ANCHOR_START, TF_SELECTION,
 };
-use ime_core::{ImeState, ModeCommand};
+use ime_core::{ImeState, InputMode, ModeCommand};
 
 use crate::text_input_processor::SharedState;
 use crate::logging::log;
+
 
 /// EditSessionで実行する操作
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -24,7 +25,7 @@ pub enum EditAction {
     MoveCursorToTail, // カーソルを末尾に移動
     Commit, // 現在のCompositionを確定
     Clear, // 現在のCompositionを削除
-    SetOpen(bool), // IMEの開閉状態を変更
+    SetOpen(bool, Option<InputMode>), // IMEの開閉状態を変更
     ApplyModeCommand(ModeCommand), // モードコマンドを適用
 }
 
@@ -193,18 +194,20 @@ impl ITfEditSession_Impl for SamoyedIMEEditSession_Impl {
                 }
 
                 // IMEの開閉状態を変更
-                EditAction::SetOpen(is_open) => {
-                    self.set_open(ec, *is_open)
+                EditAction::SetOpen(is_open, target_mode) => {
+                    self.set_open(ec, *is_open, *target_mode)
                 }
 
                 // モードコマンドを適用
                 EditAction::ApplyModeCommand(command) => {
-                    self.update_state_and_text(
+                    let result = self.update_state_and_text(
                         ec,
                         |ime_state| {
                             ime_state.apply_mode_command(*command);
                         },
-                    )
+                    );
+                    SharedState::notify_lang_bar_update(&self.state);
+                    result
                 }
             }
         }
@@ -631,16 +634,25 @@ impl SamoyedIMEEditSession {
     /// # 戻り値
     /// * `Ok(())`: 成功した場合
     /// * `Err(_)`: 確定またはコンパートメント更新に失敗した場合
-    unsafe fn set_open(&self, ec: u32, is_open: bool) -> WinResult<()> {
+    unsafe fn set_open(
+        &self,
+        ec: u32,
+        is_open: bool,
+        target_mode: Option<InputMode>,
+    ) -> WinResult<()> {
         // 閉じる場合は未確定文字列を確定してから状態を切り替える
         if !is_open {
             unsafe { self.commit(ec)? };
+        } else {
+            let mut state = self.state.lock().unwrap();
+            let mode = target_mode.unwrap_or(InputMode::Hiragana);
+            state.ime_state.set_input_mode(mode);
         }
 
         // コンパートメントと is_open を同時に更新する
         SharedState::set_keyboard_open(&self.state, is_open)?;
 
-        log(&format!("[SamoyedIME] SetOpen: is_open={}", is_open));
+        log(&format!("[SamoyedIME] SetOpen: is_open={}, mode={:?}", is_open, target_mode));
 
         Ok(())
     }
