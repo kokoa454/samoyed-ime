@@ -7,6 +7,7 @@ const CONSONANTS: &str = "bcdfghjklmpqrstvwxyz"; // 「n」以外の子音
 const ROMAJI_N: char = 'n'; // 「n」
 const ROMAJI_Y: char = 'y'; // 「y」
 const ROMAJI_X: char = 'x'; // 「x」
+const ROMAJI_W: char = 'w'; // 「w」
 const ROMAJI_APOSTROPHE: char = '\''; // 「'」
 const KANA_N: &str = "ん"; // 「ん」
 const KANA_SMALL_TSU: &str = "っ"; // 「っ」
@@ -126,8 +127,8 @@ fn is_sokuon(input: &str) -> bool {
         None => return false,
     };
 
-    // 最初の2文字が同じ子音か (ただし 'n' は除く)
-    c1 == c2 && c1 != ROMAJI_N && CONSONANTS.contains(c1)
+    // 最初の2文字が同じ子音か (ただし 'n', 'w' は除く)
+    c1 == c2 && c1 != ROMAJI_N && c1 != ROMAJI_W && CONSONANTS.contains(c1)
 }
 
 
