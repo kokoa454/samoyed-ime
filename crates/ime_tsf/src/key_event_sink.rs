@@ -9,6 +9,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     VK_KANA, VK_KANJI, VK_LEFT, VK_LWIN, VK_MENU, VK_NONCONVERT,
     VK_OEM_AUTO, VK_OEM_ENLW, VK_RETURN, VK_RIGHT, VK_RWIN, VK_SHIFT,
     VK_DBE_ALPHANUMERIC, VK_DBE_HIRAGANA, VK_DBE_KATAKANA,
+    VK_F6, VK_F7, VK_F8, VK_F9, VK_F10,
 };
 use windows::Win32::UI::TextServices::{ITfContext, ITfKeyEventSink, ITfKeyEventSink_Impl};
 
@@ -78,6 +79,9 @@ impl KeyEventSink {
 
         // モード遷移キーをチェック
         if let Some(action) = route_edit_key(vk, state.is_open, ime_state.has_active_input()) {
+            if is_function_key(vk) && has_blocking_modifier() {
+                return None;
+            }
             return Some(action);
         }
 
@@ -597,8 +601,18 @@ pub(crate) fn route_edit_key(
         x if x == VK_END.0 => Some(EditAction::MoveCursorToTail),
         x if x == VK_RETURN.0 => Some(EditAction::Commit),
         x if x == VK_ESCAPE.0 => Some(EditAction::Clear),
+        x if x == VK_F6.0 => Some(EditAction::ConvertComposition(ime_core::InputMode::Hiragana)),
+        x if x == VK_F7.0 => Some(EditAction::ConvertComposition(ime_core::InputMode::FullWidthKatakana)),
+        x if x == VK_F8.0 => Some(EditAction::ConvertComposition(ime_core::InputMode::HalfWidthKatakana)),
+        x if x == VK_F9.0 => Some(EditAction::ConvertComposition(ime_core::InputMode::FullWidthAlphanumeric)),
+        x if x == VK_F10.0 => Some(EditAction::ConvertComposition(ime_core::InputMode::HalfWidthAlphanumeric)),
         _ => None,
     }
+}
+
+/// ファンクションキー（F6〜F10）かどうかを判定する。
+fn is_function_key(vk: u16) -> bool {
+    (VK_F6.0..=VK_F10.0).contains(&vk)
 }
 
 /// VKコードをモード切替コマンドへ変換する。
@@ -1012,6 +1026,11 @@ mod tests {
             (VK_END.0, Some(EditAction::MoveCursorToTail)),
             (VK_RETURN.0, Some(EditAction::Commit)),
             (VK_ESCAPE.0, Some(EditAction::Clear)),
+            (VK_F6.0, Some(EditAction::ConvertComposition(ime_core::InputMode::Hiragana))),
+            (VK_F7.0, Some(EditAction::ConvertComposition(ime_core::InputMode::FullWidthKatakana))),
+            (VK_F8.0, Some(EditAction::ConvertComposition(ime_core::InputMode::HalfWidthKatakana))),
+            (VK_F9.0, Some(EditAction::ConvertComposition(ime_core::InputMode::FullWidthAlphanumeric))),
+            (VK_F10.0, Some(EditAction::ConvertComposition(ime_core::InputMode::HalfWidthAlphanumeric))),
         ];
 
         for (vk, expected) in &edit_keys {
@@ -1171,5 +1190,34 @@ mod tests {
         state.apply_mode_command(cmd);
         assert_eq!(state.get_input_mode(), InputMode::Hiragana);
         assert_eq!(state.get_display_text(), "ああああ");
+    }
+
+    /// F6〜F10のファンクションキーによる変換E2Eテスト
+    #[test]
+    fn test_e2e_function_keys_f6_to_f10() {
+        let run_test = |vk: windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY, expected: &str| {
+            let mut state = ImeState::new();
+            for ch in "tesuto".chars() {
+                state.input_char(ch);
+            }
+            assert_eq!(state.get_display_text(), "てすと");
+
+            let action = route_edit_key(vk.0, true, state.has_active_input()).unwrap();
+            match action {
+                EditAction::ConvertComposition(mode) => {
+                    state.convert_composition(mode);
+                }
+                _ => panic!("Expected ConvertComposition"),
+            }
+            assert_eq!(state.get_display_text(), expected);
+            // 入力モード自体はひらがなのまま
+            assert_eq!(state.get_input_mode(), InputMode::Hiragana);
+        };
+
+        run_test(VK_F6, "てすと");
+        run_test(VK_F7, "テスト");
+        run_test(VK_F8, "ﾃｽﾄ");
+        run_test(VK_F9, "ｔｅｓｕｔｏ");
+        run_test(VK_F10, "tesuto");
     }
 }

@@ -27,6 +27,7 @@ pub enum EditAction {
     Clear, // 現在のCompositionを削除
     SetOpen(bool, Option<InputMode>), // IMEの開閉状態を変更
     ApplyModeCommand(ModeCommand), // モードコマンドを適用
+    ConvertComposition(InputMode), // ファンクションキーによるComposition変換
 }
 
 /// Composition終了通知Sink
@@ -208,6 +209,16 @@ impl ITfEditSession_Impl for SamoyedIMEEditSession_Impl {
                     );
                     SharedState::notify_lang_bar_update(&self.state);
                     result
+                }
+
+                // ファンクションキーによるComposition変換
+                EditAction::ConvertComposition(target_mode) => {
+                    self.update_state_and_text(
+                        ec,
+                        |ime_state| {
+                            ime_state.convert_composition(*target_mode);
+                        },
+                    )
                 }
             }
         }

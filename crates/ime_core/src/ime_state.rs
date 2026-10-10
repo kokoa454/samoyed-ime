@@ -33,6 +33,7 @@ pub enum ModeCommand {
 #[derive(Clone, PartialEq, Eq)]
 pub struct ImeState {
     input_mode: InputMode, // 現在の入力モード
+    conversion_mode: Option<InputMode>, // ファンクションキー等による一時変換モード
     composition: Composition, // 現在の未確定文字列
     romaji_input: RomajiInput, // ローマ字入力
 }
@@ -42,6 +43,7 @@ impl ImeState {
     pub fn new() -> Self {
         Self {
             input_mode: InputMode::Hiragana,
+            conversion_mode: None,
             composition: Composition::new(),
             romaji_input: RomajiInput::new(),
         }
@@ -73,6 +75,8 @@ impl ImeState {
             return;
         }
 
+        self.conversion_mode = None;
+
         match command {
             // 指定された入力モードへ変更
             ModeCommand::SetInputMode(mode) => {
@@ -99,6 +103,39 @@ impl ImeState {
                 self.composition.insert(ch);
             }
         }
+    }
+
+    /// 未確定文字列を指定された入力モードの文字種に変換する（ファンクションキー変換）。
+    ///
+    /// 引数
+    /// * `target_mode`: 変換先の入力モード（文字種）
+    pub fn convert_composition(&mut self, target_mode: InputMode) {
+        if !self.has_active_input() {
+            return;
+        }
+
+        // 未変換ローマ字（pending）がある場合、解決してCompositionに取り込む
+        if self.romaji_input.has_pending_input() {
+            let pending = self.romaji_input.get_pending_input();
+            let resolved = if pending == "n" {
+                "ん".to_string()
+            } else {
+                pending.to_string()
+            };
+            for ch in resolved.chars() {
+                self.composition.insert(ch);
+            }
+            self.romaji_input.clear();
+        }
+
+        let current: String = self.composition.get_content_units().iter().collect();
+        let converted = convert_text_to_mode(&current, target_mode);
+        self.composition.clear();
+        for ch in converted.chars() {
+            self.composition.insert(ch);
+        }
+
+        self.conversion_mode = Some(target_mode);
     }
 
     /// かな種別を巡回させる（無変換キー）。
@@ -182,6 +219,8 @@ impl ImeState {
     /// 戻り値
     /// * `String`: 変換後の文字
     pub fn input_char(&mut self, input: char) -> String {
+        self.conversion_mode = None;
+
         let raw = match self.input_mode {
             // 英数モードはローマ字変換せず、そのまま入れる
             InputMode::FullWidthAlphanumeric | InputMode::HalfWidthAlphanumeric => {
@@ -205,6 +244,10 @@ impl ImeState {
     /// 戻り値
     /// * `String`: 画面に表示する文字列
     pub fn get_display_text(&self) -> String {
+        if self.conversion_mode.is_some() {
+            return self.composition.get_content_units().iter().collect();
+        }
+
         let content_units = self.composition.get_content_units();
         let cursor_pos = self
             .composition
@@ -237,6 +280,10 @@ impl ImeState {
     /// 戻り値
     /// * `usize`: 表示テキスト上のカーソル位置（文字数単位）
     pub fn get_cursor_pos(&self) -> usize {
+        if self.conversion_mode.is_some() {
+            return self.composition.get_cursor_pos();
+        }
+
         let content_units = self.composition.get_content_units();
         let source_cursor_pos = self.composition.get_cursor_pos().min(content_units.len());
 
@@ -347,6 +394,7 @@ impl ImeState {
     pub fn clear(&mut self) {
         self.composition.clear();
         self.romaji_input.clear();
+        self.conversion_mode = None;
     }
 }
 
@@ -1477,5 +1525,106 @@ mod tests {
         state.apply_mode_command(ModeCommand::ToggleAlphanumeric);
         assert_eq!(state.get_input_mode(), InputMode::Hiragana);
         assert_eq!(state.get_display_text(), "か");
+    }
+
+    // ============================================================
+    // ファンクションキー変換 (convert_composition: F6〜F10)
+    // ============================================================
+
+    #[test]
+    fn test_convert_composition_f6_to_f10() {
+        // F6: ひらがな「てすと」
+        let mut state = ImeState::new();
+        for ch in "tesuto".chars() { state.input_char(ch); }
+        state.convert_composition(InputMode::Hiragana);
+        assert_eq!(state.get_display_text(), "てすと");
+        assert_eq!(state.get_input_mode(), InputMode::Hiragana);
+
+        // F7: 全角カタカナ「テスト」
+        let mut state = ImeState::new();
+        for ch in "tesuto".chars() { state.input_char(ch); }
+        state.convert_composition(InputMode::FullWidthKatakana);
+        assert_eq!(state.get_display_text(), "テスト");
+        assert_eq!(state.get_input_mode(), InputMode::Hiragana);
+
+        // F8: 半角カタカナ「ﾃｽﾄ」
+        let mut state = ImeState::new();
+        for ch in "tesuto".chars() { state.input_char(ch); }
+        state.convert_composition(InputMode::HalfWidthKatakana);
+        assert_eq!(state.get_display_text(), "ﾃｽﾄ");
+        assert_eq!(state.get_input_mode(), InputMode::Hiragana);
+
+        // F9: 全角英数「ｔｅｓｕｔｏ」
+        let mut state = ImeState::new();
+        for ch in "tesuto".chars() { state.input_char(ch); }
+        state.convert_composition(InputMode::FullWidthAlphanumeric);
+        assert_eq!(state.get_display_text(), "ｔｅｓｕｔｏ");
+        assert_eq!(state.get_input_mode(), InputMode::Hiragana);
+
+        // F10: 半角英数「tesuto」
+        let mut state = ImeState::new();
+        for ch in "tesuto".chars() { state.input_char(ch); }
+        state.convert_composition(InputMode::HalfWidthAlphanumeric);
+        assert_eq!(state.get_display_text(), "tesuto");
+        assert_eq!(state.get_input_mode(), InputMode::Hiragana);
+    }
+
+    #[test]
+    fn test_convert_composition_cycles() {
+        let mut state = ImeState::new();
+        for ch in "tesuto".chars() { state.input_char(ch); }
+
+        state.convert_composition(InputMode::FullWidthKatakana);
+        assert_eq!(state.get_display_text(), "テスト");
+
+        state.convert_composition(InputMode::HalfWidthKatakana);
+        assert_eq!(state.get_display_text(), "ﾃｽﾄ");
+
+        state.convert_composition(InputMode::FullWidthAlphanumeric);
+        assert_eq!(state.get_display_text(), "ｔｅｓｕｔｏ");
+
+        state.convert_composition(InputMode::HalfWidthAlphanumeric);
+        assert_eq!(state.get_display_text(), "tesuto");
+
+        state.convert_composition(InputMode::Hiragana);
+        assert_eq!(state.get_display_text(), "てすと");
+
+        // ベースの入力モードは変更されていないこと
+        assert_eq!(state.get_input_mode(), InputMode::Hiragana);
+    }
+
+    #[test]
+    fn test_convert_composition_resolves_pending_romaji() {
+        let mut state = ImeState::new();
+        for ch in "kan".chars() { state.input_char(ch); }
+        assert!(state.has_pending_input());
+
+        state.convert_composition(InputMode::FullWidthKatakana);
+        assert_eq!(state.get_display_text(), "カン");
+        assert!(!state.has_pending_input());
+    }
+
+    #[test]
+    fn test_convert_composition_noop_without_active_input() {
+        let mut state = ImeState::new();
+        state.convert_composition(InputMode::FullWidthKatakana);
+        assert_eq!(state.get_display_text(), "");
+        assert_eq!(state.get_input_mode(), InputMode::Hiragana);
+    }
+
+    #[test]
+    fn test_convert_composition_clear_restores_state() {
+        let mut state = ImeState::new();
+        for ch in "tesuto".chars() { state.input_char(ch); }
+        state.convert_composition(InputMode::FullWidthKatakana);
+        assert_eq!(state.get_display_text(), "テスト");
+
+        state.clear();
+        assert_eq!(state.get_display_text(), "");
+        assert_eq!(state.get_input_mode(), InputMode::Hiragana);
+
+        // 次の入力はひらがなモードのまま
+        state.input_char('a');
+        assert_eq!(state.get_display_text(), "あ");
     }
 }
