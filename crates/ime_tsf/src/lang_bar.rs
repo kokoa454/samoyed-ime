@@ -277,8 +277,12 @@ impl ITfSource_Impl for SamoyedLangBarItem_Impl {
 /// 戻り値
 /// * `HICON`: 作成したアイコン
 fn create_text_icon(text: &str) -> HICON {
-    const W: i32 = 16;
-    const H: i32 = 16;
+    // 画面DPIに応じたスモールアイコンサイズを取得（高DPI対応）
+    use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXSMICON, SM_CYSMICON};
+    let raw_w = unsafe { GetSystemMetrics(SM_CXSMICON) };
+    let raw_h = unsafe { GetSystemMetrics(SM_CYSMICON) };
+    let w = if raw_w > 0 { raw_w } else { 16 };
+    let h = if raw_h > 0 { raw_h } else { 16 };
 
     unsafe {
         let hwnd = Some(HWND(std::ptr::null_mut()));
@@ -296,8 +300,8 @@ fn create_text_icon(text: &str) -> HICON {
         let bmi = BITMAPINFO {
             bmiHeader: BITMAPINFOHEADER {
                 biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-                biWidth: W,
-                biHeight: -H,
+                biWidth: w,
+                biHeight: -h,
                 biPlanes: 1,
                 biBitCount: 32,
                 biCompression: 0,
@@ -327,7 +331,7 @@ fn create_text_icon(text: &str) -> HICON {
             }
         };
 
-        let hbm_mask = CreateBitmap(W, H, 1, 1, None);
+        let hbm_mask = CreateBitmap(w, h, 1, 1, None);
         if hbm_mask.0.is_null() {
             let _ = DeleteObject(hbm_color.into());
             let _ = DeleteDC(hdc_mem);
@@ -338,24 +342,30 @@ fn create_text_icon(text: &str) -> HICON {
         let _ = ReleaseDC(hwnd, hdc_screen);
 
         let mut face = [0u16; LF_FACESIZE];
-        let face_str = "MS Gothic";
+        // Meiryo UI: 極小サイズのタスクバーアイコンでの視認性が最良
+        let face_str = "Meiryo UI";
         for (i, c) in face_str.encode_utf16().enumerate().take(LF_FACESIZE) {
             face[i] = c;
         }
 
+        // フォント高さはアイコン枠の約80%
+        let font_height = -((h * 80) / 100).max(10);
+        // フォント幅はアイコン枠の約60%
+        let font_width = (w * 50) / 100;
+
         let lf = LOGFONTW {
-            lfHeight: -11,
-            lfWidth: 0,
+            lfHeight: font_height,
+            lfWidth: font_width,
             lfEscapement: 0,
             lfOrientation: 0,
-            lfWeight: 700,
+            lfWeight: 200, // Regular: Google IMEに合わせた細め
             lfItalic: 0,
             lfUnderline: 0,
             lfStrikeOut: 0,
             lfCharSet: FONT_CHARSET(128),
             lfOutPrecision: FONT_OUTPUT_PRECISION(0),
             lfClipPrecision: FONT_CLIP_PRECISION(0),
-            lfQuality: FONT_QUALITY(0),
+            lfQuality: CLEARTYPE_QUALITY,
             lfPitchAndFamily: 0,
             lfFaceName: face,
         };
@@ -372,7 +382,7 @@ fn create_text_icon(text: &str) -> HICON {
         let old_font = SelectObject(hdc_mem, HGDIOBJ(h_font.0));
 
         let h_black = CreateSolidBrush(COLORREF(0x00000000));
-        let rc = RECT { left: 0, top: 0, right: W, bottom: H };
+        let rc = RECT { left: 0, top: 0, right: w, bottom: h };
         FillRect(hdc_mem, &rc, h_black);
         let _ = DeleteObject(HGDIOBJ(h_black.0));
 
@@ -380,7 +390,7 @@ fn create_text_icon(text: &str) -> HICON {
         let _ = SetTextColor(hdc_mem, COLORREF(0x00FFFFFF));
 
         let mut text_wide: Vec<u16> = text.encode_utf16().collect();
-        let mut rc_text = RECT { left: 0, top: 0, right: W, bottom: H };
+        let mut rc_text = RECT { left: 0, top: 0, right: w, bottom: h };
         DrawTextW(
             hdc_mem,
             &mut text_wide,
@@ -391,12 +401,18 @@ fn create_text_icon(text: &str) -> HICON {
         let _ = SelectObject(hdc_mem, old_font);
         let _ = SelectObject(hdc_mem, old_bmp);
 
+        // Pre-multiplied ARGB: ClearTypeのアンチエイリアスを正確にアルファへ変換
         if !bits.is_null() {
             let p = bits as *mut u32;
-            for i in 0..(W * H) as usize {
+            for i in 0..(w * h) as usize {
                 let pixel = *p.add(i);
-                if (pixel & 0x00FFFFFF) != 0 {
-                    *p.add(i) = pixel | 0xFF000000;
+                // GDIはBGR順で書き込む（B=bits[0], G=bits[8], R=bits[16]）
+                let b = (pixel & 0xFF) as u32;
+                let g = ((pixel >> 8) & 0xFF) as u32;
+                let r = ((pixel >> 16) & 0xFF) as u32;
+                let alpha = r.max(g).max(b);
+                if alpha > 0 {
+                    *p.add(i) = (alpha << 24) | (alpha << 16) | (alpha << 8) | alpha;
                 } else {
                     *p.add(i) = 0x00000000;
                 }
@@ -414,7 +430,7 @@ fn create_text_icon(text: &str) -> HICON {
         let _ = SetBkMode(hdc_mask, TRANSPARENT);
         let _ = SetTextColor(hdc_mask, COLORREF(0x00000000));
 
-        let mut rc_mask = RECT { left: 0, top: 0, right: W, bottom: H };
+        let mut rc_mask = RECT { left: 0, top: 0, right: w, bottom: h };
         DrawTextW(
             hdc_mask,
             &mut text_wide,
