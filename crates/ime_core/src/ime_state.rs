@@ -1627,4 +1627,45 @@ mod tests {
         state.input_char('a');
         assert_eq!(state.get_display_text(), "あ");
     }
+
+    // ============================================================
+    // スペースキー入力
+    // ============================================================
+
+    #[test]
+    fn test_space_input_per_mode() {
+        // ひらがなモード: 全角スペース
+        let mut state = ImeState::new();
+        assert!(state.can_input_char(' '));
+        state.input_char(' ');
+        assert_eq!(state.get_display_text(), "　");
+
+        // 全角カタカナモード: 全角スペース
+        let mut state = ImeState::new();
+        state.set_input_mode(InputMode::FullWidthKatakana);
+        assert!(state.can_input_char(' '));
+        state.input_char(' ');
+        assert_eq!(state.get_display_text(), "　");
+
+        // 全角英数モード: 全角スペース
+        let mut state = ImeState::new();
+        state.set_input_mode(InputMode::FullWidthAlphanumeric);
+        assert!(state.can_input_char(' '));
+        state.input_char(' ');
+        assert_eq!(state.get_display_text(), "　");
+
+        // 半角カタカナモード: 半角スペース
+        let mut state = ImeState::new();
+        state.set_input_mode(InputMode::HalfWidthKatakana);
+        assert!(state.can_input_char(' '));
+        state.input_char(' ');
+        assert_eq!(state.get_display_text(), " ");
+
+        // 半角英数モード: 半角スペース
+        let mut state = ImeState::new();
+        state.set_input_mode(InputMode::HalfWidthAlphanumeric);
+        assert!(state.can_input_char(' '));
+        state.input_char(' ');
+        assert_eq!(state.get_display_text(), " ");
+    }
 }

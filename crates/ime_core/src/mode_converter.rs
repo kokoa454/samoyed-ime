@@ -49,7 +49,7 @@ pub fn hiragana_to_full_width_katakana(text: &str) -> String {
 /// * `char`: 変換後の文字
 fn to_half_width_alphanumeric_char(ch: char) -> char {
     match ch {
-        ' ' => ' ',
+        ' ' | '　' => ' ',
         '\u{FF01}'..='\u{FF5E}' => char::from_u32(ch as u32 - 0xFEE0).unwrap_or(ch),
         c => c,
     }
