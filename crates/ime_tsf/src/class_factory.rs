@@ -70,6 +70,14 @@ impl IClassFactory_Impl for ClassFactory_Impl {
                 return Err(E_POINTER.into());
             }
 
+            // DisplayAttributeProviderが要求された場合
+            if *riid == windows::Win32::UI::TextServices::ITfDisplayAttributeProvider::IID {
+                let provider = crate::display_attribute::DisplayAttributeProvider::new();
+                let unknown: IUnknown = provider.into();
+                unknown.query(riid, ppvobject).ok()?;
+                return Ok(());
+            }
+
             // TextInputProcessorを生成
             let text_input_processor = TextService::new();
 

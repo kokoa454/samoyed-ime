@@ -9,6 +9,7 @@ use windows::Win32::UI::TextServices::{
 };
 use ime_core::{ImeState, InputMode, ModeCommand};
 
+use crate::display_attribute::{clear_display_attribute, set_display_attribute, GUID_SAMOYED_DISPLAY_ATTR_INPUT};
 use crate::text_input_processor::SharedState;
 use crate::logging::log;
 
@@ -410,7 +411,13 @@ impl SamoyedIMEEditSession {
         let composition_range = unsafe { composition.GetRange()? };
 
         unsafe {
-            composition_range.SetText(ec, 0, &utf16_text)?
+            composition_range.SetText(ec, 0, &utf16_text)?;
+            let _ = set_display_attribute(
+                &self.context,
+                ec,
+                &composition_range,
+                &GUID_SAMOYED_DISPLAY_ATTR_INPUT,
+            );
         };
 
         log(&format!(
@@ -456,7 +463,13 @@ impl SamoyedIMEEditSession {
                 ec,
                 0,
                 &utf16_text,
-            )?
+            )?;
+            let _ = set_display_attribute(
+                &self.context,
+                ec,
+                &range,
+                &GUID_SAMOYED_DISPLAY_ATTR_INPUT,
+            );
         };
 
         log(&format!(
@@ -483,6 +496,7 @@ impl SamoyedIMEEditSession {
     ) -> WinResult<()> {
         let range = unsafe { composition.GetRange()? };
 
+        let _ = clear_display_attribute(&self.context, ec, &range);
         unsafe { range.SetText(ec, 0, &[],)? };
         unsafe { composition.EndComposition(ec)? };
 
@@ -603,6 +617,9 @@ impl SamoyedIMEEditSession {
 
         if let Some(composition) = composition {
             unsafe {
+                if let Ok(range) = composition.GetRange() {
+                    let _ = clear_display_attribute(&self.context, ec, &range);
+                }
                 composition.EndComposition(ec)?;
             }
         }
@@ -635,6 +652,7 @@ impl SamoyedIMEEditSession {
         if let Some(composition) = composition {
             let range = unsafe { composition.GetRange()? };
 
+            let _ = clear_display_attribute(&self.context, ec, &range);
             unsafe { range.SetText(ec, 0, &[],)? };
             unsafe { composition.EndComposition(ec)? };
         }

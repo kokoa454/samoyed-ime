@@ -3,16 +3,18 @@ use std::sync::atomic::Ordering::SeqCst;
 use std::sync::{Arc, Mutex};
 
 use ime_core::ImeState;
-use windows::core::{implement, Interface, Ref, Result as WinResult};
+use windows::core::{implement, Interface, Ref, Result as WinResult, GUID};
 use windows::Win32::Foundation::E_FAIL;
 use windows::Win32::System::Variant::VARIANT;
 use windows::Win32::UI::TextServices::{
     GUID_COMPARTMENT_KEYBOARD_OPENCLOSE, ITfCompartmentMgr, ITfComposition, ITfContext,
+    ITfDisplayAttributeInfo, ITfDisplayAttributeProvider, ITfDisplayAttributeProvider_Impl,
     ITfEditSession, ITfKeyEventSink, ITfKeystrokeMgr, ITfLangBarItem, ITfLangBarItemMgr,
     ITfLangBarItemSink, ITfTextInputProcessor, ITfTextInputProcessor_Impl,
-    ITfThreadMgr, TF_ES_ASYNCDONTCARE, TF_ES_READWRITE,
+    ITfThreadMgr, TF_ES_ASYNCDONTCARE, TF_ES_READWRITE, IEnumTfDisplayAttributeInfo,
 };
 
+use crate::display_attribute::{DisplayAttributeProvider, EnumDisplayAttributeInfo};
 use crate::edit_session::{EditAction, SamoyedIMEEditSession};
 use crate::key_event_sink::KeyEventSink;
 use crate::lang_bar::SamoyedLangBarItem;
@@ -21,7 +23,7 @@ use crate::LIVE_OBJECT_COUNT;
 
 
 /// TSF Text Service本体
-#[implement(ITfTextInputProcessor)]
+#[implement(ITfTextInputProcessor, ITfDisplayAttributeProvider)]
 pub struct TextService {
     state: Arc<Mutex<SharedState>>, // TextServiceが共有する状態
     lang_bar_item: Mutex<Option<ITfLangBarItem>>, // LangBarItemへのポインタ
@@ -175,6 +177,29 @@ impl ITfTextInputProcessor_Impl for TextService_Impl {
         }
 
         Ok(())
+    }
+}
+
+impl ITfDisplayAttributeProvider_Impl for TextService_Impl {
+    /// EnumDisplayAttributeInfoを取得する。
+    ///
+    /// # 戻り値
+    /// * `Ok(IEnumTfDisplayAttributeInfo)`: EnumDisplayAttributeInfo
+    /// * `Err(E_FAIL)`: 失敗した場合
+    fn EnumDisplayAttributeInfo(&self) -> WinResult<IEnumTfDisplayAttributeInfo> {
+        Ok(EnumDisplayAttributeInfo::new().into())
+    }
+
+    /// DisplayAttributeInfoを取得する。
+    ///
+    /// # 引数
+    /// * `guid`: GUID
+    ///
+    /// # 戻り値
+    /// * `Ok(ITfDisplayAttributeInfo)`: DisplayAttribute
+    /// * `Err(E_FAIL)`: 失敗した場合
+    fn GetDisplayAttributeInfo(&self, guid: *const GUID) -> WinResult<ITfDisplayAttributeInfo> {
+        DisplayAttributeProvider::get_info(guid)
     }
 }
 

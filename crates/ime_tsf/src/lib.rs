@@ -4,6 +4,7 @@ mod text_input_processor;
 mod logging;
 mod edit_session;
 mod lang_bar;
+mod display_attribute;
 
 use std::ffi::c_void;
 use std::ptr::null_mut;
@@ -25,6 +26,13 @@ use windows::Win32::System::Registry::{
 use windows::Win32::UI::TextServices::{
     ITfCategoryMgr, ITfInputProcessorProfiles, CLSID_TF_CategoryMgr,
     CLSID_TF_InputProcessorProfiles, GUID_TFCAT_TIP_KEYBOARD,
+    GUID_TFCAT_DISPLAYATTRIBUTEPROVIDER, GUID_TFCAT_DISPLAYATTRIBUTEPROPERTY,
+};
+
+use crate::display_attribute::{
+    GUID_SAMOYED_DISPLAY_ATTR_INPUT,
+    GUID_SAMOYED_DISPLAY_ATTR_TARGET_CONVERTED,
+    GUID_SAMOYED_DISPLAY_ATTR_CONVERTED,
 };
 
 use crate::logging::log;
@@ -271,8 +279,39 @@ pub unsafe extern "system" fn DllRegisterServer() -> HRESULT {
             &CLSID_SAMOYED_IME,
         )
     } {
-        log(&format!("[SamoyedIME] RegisterCategory failed: {:?}", e));
+        log(&format!("[SamoyedIME] RegisterCategory TIP_KEYBOARD failed: {:?}", e));
         return E_FAIL;
+    }
+
+    // Display Attribute Provider の登録
+    if let Err(e) = unsafe {
+        category_mgr.RegisterCategory(
+            &CLSID_SAMOYED_IME,
+            &GUID_TFCAT_DISPLAYATTRIBUTEPROVIDER,
+            &CLSID_SAMOYED_IME,
+        )
+    } {
+        log(&format!("[SamoyedIME] RegisterCategory DISPLAYATTRIBUTEPROVIDER failed: {:?}", e));
+        return E_FAIL;
+    }
+
+    // 各属性 GUID の登録
+    let attr_guids = [
+        GUID_SAMOYED_DISPLAY_ATTR_INPUT,
+        GUID_SAMOYED_DISPLAY_ATTR_TARGET_CONVERTED,
+        GUID_SAMOYED_DISPLAY_ATTR_CONVERTED,
+    ];
+    for guid in &attr_guids {
+        if let Err(e) = unsafe {
+            category_mgr.RegisterCategory(
+                &CLSID_SAMOYED_IME,
+                &GUID_TFCAT_DISPLAYATTRIBUTEPROPERTY,
+                guid,
+            )
+        } {
+            log(&format!("[SamoyedIME] RegisterCategory DISPLAYATTRIBUTEPROPERTY {:?} failed: {:?}", guid, e));
+            return E_FAIL;
+        }
     }
 
     log("[SamoyedIME] DllRegisterServer succeeded");
@@ -293,6 +332,29 @@ pub unsafe extern "system" fn DllUnregisterServer() -> HRESULT {
     let _ = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
 
     if let Ok(category_mgr) = unsafe { CoCreateInstance::<_, ITfCategoryMgr>(&CLSID_TF_CategoryMgr, None, CLSCTX_INPROC_SERVER) } {
+        let attr_guids = [
+            GUID_SAMOYED_DISPLAY_ATTR_INPUT,
+            GUID_SAMOYED_DISPLAY_ATTR_TARGET_CONVERTED,
+            GUID_SAMOYED_DISPLAY_ATTR_CONVERTED,
+        ];
+        for guid in &attr_guids {
+            let _ = unsafe {
+                category_mgr.UnregisterCategory(
+                    &CLSID_SAMOYED_IME,
+                    &GUID_TFCAT_DISPLAYATTRIBUTEPROPERTY,
+                    guid,
+                )
+            };
+        }
+
+        let _ = unsafe {
+            category_mgr.UnregisterCategory(
+                &CLSID_SAMOYED_IME,
+                &GUID_TFCAT_DISPLAYATTRIBUTEPROVIDER,
+                &CLSID_SAMOYED_IME,
+            )
+        };
+
         let _ = unsafe {
             category_mgr.UnregisterCategory(
                 &CLSID_SAMOYED_IME,
