@@ -28,6 +28,7 @@ pub enum EditAction {
     SetOpen(bool, Option<InputMode>), // IMEの開閉状態を変更
     ApplyModeCommand(ModeCommand), // モードコマンドを適用
     ConvertComposition(InputMode), // ファンクションキーによるComposition変換
+    InputSpace(bool), // スペースを入力 (is_shift)
 }
 
 /// Composition終了通知Sink
@@ -217,6 +218,16 @@ impl ITfEditSession_Impl for SamoyedIMEEditSession_Impl {
                         ec,
                         |ime_state| {
                             ime_state.convert_composition(*target_mode);
+                        },
+                    )
+                }
+
+                // スペース入力
+                EditAction::InputSpace(is_shift) => {
+                    self.update_state_and_text(
+                        ec,
+                        |ime_state| {
+                            ime_state.input_space(*is_shift);
                         },
                     )
                 }

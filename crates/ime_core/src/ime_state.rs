@@ -158,7 +158,7 @@ impl ImeState {
         };
     }
 
-    /// モードに応じて文字列を変換する。
+    /// モードに応じて文字列を変換する。スペース文字（半角/全角）はそのまま保持する。
     ///
     /// 引数
     /// * `text`: 変換する文字列
@@ -166,25 +166,40 @@ impl ImeState {
     /// 戻り値
     /// * `String`: 変換後の文字列
     fn convert_text(&self, text: &str) -> String {
-        //半角カタカナを全角カタカナに、ひらがなに変換
-        let normalized = {
-            let full_width_kana = half_width_katakana_to_full_width_katakana(text);
-            let hiragana = full_width_katakana_to_hiragana(&full_width_kana);
-            half_width_alphanumeric_to_full_width_alphanumeric(&hiragana)
+        let mut result = String::with_capacity(text.len());
+        let mut non_space_buf = String::new();
+
+        let flush_buf = |buf: &mut String, res: &mut String| {
+            if !buf.is_empty() {
+                let normalized = {
+                    let full_width_kana = half_width_katakana_to_full_width_katakana(buf);
+                    let hiragana = full_width_katakana_to_hiragana(&full_width_kana);
+                    half_width_alphanumeric_to_full_width_alphanumeric(&hiragana)
+                };
+
+                let converted = match self.input_mode {
+                    InputMode::Hiragana => normalized,
+                    InputMode::FullWidthKatakana => hiragana_to_full_width_katakana(&normalized),
+                    InputMode::HalfWidthKatakana => hiragana_to_half_width_katakana(&normalized),
+                    InputMode::FullWidthAlphanumeric => normalized,
+                    InputMode::HalfWidthAlphanumeric => full_width_alphanumeric_to_half_width_alphanumeric(&normalized),
+                };
+                res.push_str(&converted);
+                buf.clear();
+            }
         };
 
-        match self.input_mode {
-            // ひらがな
-            InputMode::Hiragana => normalized,
-            // 全角カタカナ
-            InputMode::FullWidthKatakana => hiragana_to_full_width_katakana(&normalized),
-            // 半角カタカナ
-            InputMode::HalfWidthKatakana => hiragana_to_half_width_katakana(&normalized),
-            // 全角英数
-            InputMode::FullWidthAlphanumeric => normalized.clone(),
-            // 半角英数
-            InputMode::HalfWidthAlphanumeric => full_width_alphanumeric_to_half_width_alphanumeric(&normalized),
+        for ch in text.chars() {
+            if ch == ' ' || ch == '　' {
+                flush_buf(&mut non_space_buf, &mut result);
+                result.push(ch);
+            } else {
+                non_space_buf.push(ch);
+            }
         }
+        flush_buf(&mut non_space_buf, &mut result);
+
+        result
     }
 }
 
@@ -295,6 +310,54 @@ impl ImeState {
         let pending_display = self.convert_text(self.romaji_input.get_pending_input());
 
         before_display.chars().count() + pending_display.chars().count()
+    }
+
+    /// スペースを入力する。
+    ///
+    /// 通常（Shiftなし）時の全角/半角：
+    /// - ひらがな / 全角カタカナ / 全角英数: 全角スペース
+    /// - 半角カタカナ / 半角英数: 半角スペース
+    ///
+    /// Shiftあり時は全角/半角が反転する。
+    ///
+    /// 引数
+    /// * `is_shift`: Shiftキーが押下されているかどうか
+    ///
+    /// 戻り値
+    /// * `String`: 入力されたスペース文字列
+    pub fn input_space(&mut self, is_shift: bool) -> String {
+        self.conversion_mode = None;
+
+        // 未変換ローマ字があれば解決してCompositionに追加
+        if self.romaji_input.has_pending_input() {
+            let pending = self.romaji_input.get_pending_input();
+            let resolved = if pending == "n" {
+                "ん".to_string()
+            } else {
+                pending.to_string()
+            };
+            for ch in resolved.chars() {
+                self.composition.insert(ch);
+            }
+            self.romaji_input.clear();
+        }
+
+        // 通常スペースの種別（全角か半角か）
+        let normally_full_width = matches!(
+            self.input_mode,
+            InputMode::Hiragana | InputMode::FullWidthKatakana | InputMode::FullWidthAlphanumeric
+        );
+
+        // Shiftありの場合は反転
+        let is_full_width = if is_shift {
+            !normally_full_width
+        } else {
+            normally_full_width
+        };
+
+        let ch = if is_full_width { '　' } else { ' ' };
+        self.composition.insert(ch);
+        ch.to_string()
     }
 
     /// Compositionが存在するかどうかを取得する。
@@ -1634,38 +1697,62 @@ mod tests {
 
     #[test]
     fn test_space_input_per_mode() {
-        // ひらがなモード: 全角スペース
+        // ひらがなモード
+        // Space -> 全角スペース「　」
         let mut state = ImeState::new();
-        assert!(state.can_input_char(' '));
-        state.input_char(' ');
+        state.input_space(false);
         assert_eq!(state.get_display_text(), "　");
+        // Shift+Space -> 半角スペース「 」
+        let mut state = ImeState::new();
+        state.input_space(true);
+        assert_eq!(state.get_display_text(), " ");
 
-        // 全角カタカナモード: 全角スペース
+        // 全角カタカナモード
+        // Space -> 全角スペース「　」
         let mut state = ImeState::new();
         state.set_input_mode(InputMode::FullWidthKatakana);
-        assert!(state.can_input_char(' '));
-        state.input_char(' ');
+        state.input_space(false);
         assert_eq!(state.get_display_text(), "　");
+        // Shift+Space -> 半角スペース「 」
+        let mut state = ImeState::new();
+        state.set_input_mode(InputMode::FullWidthKatakana);
+        state.input_space(true);
+        assert_eq!(state.get_display_text(), " ");
 
-        // 全角英数モード: 全角スペース
+        // 全角英数モード
+        // Space -> 全角スペース「　」
         let mut state = ImeState::new();
         state.set_input_mode(InputMode::FullWidthAlphanumeric);
-        assert!(state.can_input_char(' '));
-        state.input_char(' ');
+        state.input_space(false);
         assert_eq!(state.get_display_text(), "　");
+        // Shift+Space -> 半角スペース「 」
+        let mut state = ImeState::new();
+        state.set_input_mode(InputMode::FullWidthAlphanumeric);
+        state.input_space(true);
+        assert_eq!(state.get_display_text(), " ");
 
-        // 半角カタカナモード: 半角スペース
+        // 半角カタカナモード
+        // Space -> 半角スペース「 」
         let mut state = ImeState::new();
         state.set_input_mode(InputMode::HalfWidthKatakana);
-        assert!(state.can_input_char(' '));
-        state.input_char(' ');
+        state.input_space(false);
         assert_eq!(state.get_display_text(), " ");
+        // Shift+Space -> 全角スペース「　」
+        let mut state = ImeState::new();
+        state.set_input_mode(InputMode::HalfWidthKatakana);
+        state.input_space(true);
+        assert_eq!(state.get_display_text(), "　");
 
-        // 半角英数モード: 半角スペース
+        // 半角英数モード
+        // Space -> 半角スペース「 」
         let mut state = ImeState::new();
         state.set_input_mode(InputMode::HalfWidthAlphanumeric);
-        assert!(state.can_input_char(' '));
-        state.input_char(' ');
+        state.input_space(false);
         assert_eq!(state.get_display_text(), " ");
+        // Shift+Space -> 全角スペース「　」
+        let mut state = ImeState::new();
+        state.set_input_mode(InputMode::HalfWidthAlphanumeric);
+        state.input_space(true);
+        assert_eq!(state.get_display_text(), "　");
     }
 }

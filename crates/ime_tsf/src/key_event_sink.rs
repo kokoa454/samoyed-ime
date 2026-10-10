@@ -9,7 +9,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     VK_KANA, VK_KANJI, VK_LEFT, VK_LWIN, VK_MENU, VK_NONCONVERT,
     VK_OEM_AUTO, VK_OEM_ENLW, VK_RETURN, VK_RIGHT, VK_RWIN, VK_SHIFT,
     VK_DBE_ALPHANUMERIC, VK_DBE_HIRAGANA, VK_DBE_KATAKANA,
-    VK_F6, VK_F7, VK_F8, VK_F9, VK_F10,
+    VK_F6, VK_F7, VK_F8, VK_F9, VK_F10, VK_SPACE,
 };
 use windows::Win32::UI::TextServices::{ITfContext, ITfKeyEventSink, ITfKeyEventSink_Impl};
 
@@ -85,9 +85,14 @@ impl KeyEventSink {
             return Some(action);
         }
 
-        // 文字入力以外でShiftを含む修飾キーはIMEで処理しない
-        if has_blocking_modifier() {
+        // Ctrl, Alt, Winなどの修飾キーはIMEで処理しない
+        if has_non_shift_blocking_modifier() {
             return None;
+        }
+
+        // スペースキー（Shiftの有無に応じて全角/半角スペースを入力）
+        if vk == VK_SPACE.0 {
+            return Some(EditAction::InputSpace(is_shift_down()));
         }
 
         // 文字入力
@@ -1219,5 +1224,87 @@ mod tests {
         run_test(VK_F8, "ﾃｽﾄ");
         run_test(VK_F9, "ｔｅｓｕｔｏ");
         run_test(VK_F10, "tesuto");
+    }
+
+    /// スペースキー（VK_SPACE）がInputSpaceアクションにルーティングされるテスト
+    #[test]
+    fn test_space_action_routing() {
+        let shared_state = SharedState {
+            client_id: None,
+            thread_mgr: None,
+            keystroke_mgr: None,
+            ime_state: ImeState::new(),
+            composition: None,
+            eaten_keys: std::collections::HashSet::new(),
+            is_open: true,
+            lang_bar_item_sink: None,
+        };
+        let state = std::sync::Arc::new(std::sync::Mutex::new(shared_state));
+        let sink = KeyEventSink::new(state.clone());
+
+        let action = sink.get_key_action(VK_SPACE.0, LPARAM(0));
+        assert!(matches!(action, Some(EditAction::InputSpace(_))));
+    }
+
+    /// Google日本語入力の挙動に準拠したスペース / Shift+スペースの各モードE2Eテスト
+    #[test]
+    fn test_e2e_space_and_shift_space_all_modes() {
+        // 1. ひらがなモード
+        // Space -> 「　あ」
+        let mut state = ImeState::new();
+        state.input_space(false);
+        state.input_char('a');
+        assert_eq!(state.get_display_text(), "　あ");
+
+        // Shift+Space -> 「 あ」
+        let mut state = ImeState::new();
+        state.input_space(true);
+        state.input_char('a');
+        assert_eq!(state.get_display_text(), " あ");
+
+        // 2. 全角カタカナモード
+        // Space -> 「　ア」
+        let mut state = ImeState::new();
+        state.set_input_mode(InputMode::FullWidthKatakana);
+        state.input_space(false);
+        state.input_char('a');
+        assert_eq!(state.get_display_text(), "　ア");
+
+        // Shift+Space -> 「 ア」
+        let mut state = ImeState::new();
+        state.set_input_mode(InputMode::FullWidthKatakana);
+        state.input_space(true);
+        state.input_char('a');
+        assert_eq!(state.get_display_text(), " ア");
+
+        // 3. 半角カタカナモード
+        // Space -> 「 ｱ」
+        let mut state = ImeState::new();
+        state.set_input_mode(InputMode::HalfWidthKatakana);
+        state.input_space(false);
+        state.input_char('a');
+        assert_eq!(state.get_display_text(), " ｱ");
+
+        // Shift+Space -> 「　ｱ」
+        let mut state = ImeState::new();
+        state.set_input_mode(InputMode::HalfWidthKatakana);
+        state.input_space(true);
+        state.input_char('a');
+        assert_eq!(state.get_display_text(), "　ｱ");
+
+        // 4. 半角英数モード
+        // Space -> 「 a」
+        let mut state = ImeState::new();
+        state.set_input_mode(InputMode::HalfWidthAlphanumeric);
+        state.input_space(false);
+        state.input_char('a');
+        assert_eq!(state.get_display_text(), " a");
+
+        // Shift+Space -> 「　a」
+        let mut state = ImeState::new();
+        state.set_input_mode(InputMode::HalfWidthAlphanumeric);
+        state.input_space(true);
+        state.input_char('a');
+        assert_eq!(state.get_display_text(), "　a");
     }
 }
