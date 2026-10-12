@@ -6,7 +6,7 @@ pub struct Composition {
 }
 
 impl Composition {
-    /// コンストラクタ
+    /// コンストラクタ。
     pub fn new() -> Self {
         Self {
             content_units: Vec::new(),
@@ -14,18 +14,24 @@ impl Composition {
         }
     }
 
-    /// 未確定文字列を取得する
+    /// 未確定文字列を取得する。
+    ///
+    /// 戻り値:
+    /// * `&[char]`: 未確定文字列
     pub fn get_content_units(&self) -> &[char] {
         &self.content_units
     }
 
-    /// 文字をカーソル位置に挿入する
+    /// 文字をカーソル位置に挿入する。
+    ///
+    /// 引数:
+    /// * `input`: 挿入する文字
     pub fn insert(&mut self, input: char) {
         self.content_units.insert(self.cursor_pos, input);
         self.cursor_pos += 1;
     }
 
-    /// カーソルの直前の文字を削除する
+    /// カーソルの直前の文字を削除する。
     pub fn backspace(&mut self) {
         if self.cursor_pos > 0 {
             self.cursor_pos -= 1;
@@ -33,49 +39,55 @@ impl Composition {
         }
     }
 
-    /// カーソルの直後の文字を削除する
+    /// カーソルの直後の文字を削除する。
     pub fn delete(&mut self) {
         if self.cursor_pos < self.content_units.len() {
             self.content_units.remove(self.cursor_pos);
         }
     }
 
-    /// 未確定文字列をクリアする
+    /// 未確定文字列をクリアする。
     pub fn clear(&mut self) {
         self.content_units.clear();
         self.cursor_pos = 0;
     }
 
-    /// 未確定文字列の長さを取得する
+    /// 未確定文字列の長さを取得する。
+    ///
+    /// 戻り値:
+    /// * `usize`: 未確定文字列の長さ
     pub fn get_content_units_len(&self) -> usize {
         self.content_units.len()
     }
 
-    /// カーソルを右に移動させる
+    /// カーソルを右に移動させる。
     pub fn move_cursor_right(&mut self) {
         if self.cursor_pos < self.content_units.len() {
             self.cursor_pos += 1;
         }
     }
 
-    /// カーソルを左に移動させる
+    /// カーソルを左に移動させる。
     pub fn move_cursor_left(&mut self) {
         if self.cursor_pos > 0 {
             self.cursor_pos -= 1;
         }
     }
 
-    /// カーソルを先頭に移動させる
+    /// カーソルを先頭に移動させる。
     pub fn move_cursor_to_head(&mut self) {
         self.cursor_pos = 0;
     }
 
-    /// カーソルを末尾に移動させる
+    /// カーソルを末尾に移動させる。
     pub fn move_cursor_to_tail(&mut self) {
         self.cursor_pos = self.content_units.len();
     }
 
-    /// カーソル位置を取得する
+    /// カーソル位置を取得する。
+    ///
+    /// 戻り値:
+    /// * `usize`: カーソル位置
     pub fn get_cursor_pos(&self) -> usize {
         self.cursor_pos
     }

@@ -96,7 +96,7 @@ impl DisplayAttributeInfo {
 impl ITfDisplayAttributeInfo_Impl for DisplayAttributeInfo_Impl {
     /// GUIDを取得する。
     ///
-    /// # 戻り値
+    /// 戻り値:
     /// * `Ok(GUID)`: GUID
     /// * `Err(E_FAIL)`: 失敗した場合
     fn GetGUID(&self) -> WinResult<GUID> {
@@ -105,7 +105,7 @@ impl ITfDisplayAttributeInfo_Impl for DisplayAttributeInfo_Impl {
 
     /// Descriptionを取得する。
     /// 
-    /// # 戻り値
+    /// 戻り値:
     /// * `Ok(BSTR)`: Description
     /// * `Err(E_FAIL)`: 失敗した場合
     fn GetDescription(&self) -> WinResult<BSTR> {
@@ -114,10 +114,10 @@ impl ITfDisplayAttributeInfo_Impl for DisplayAttributeInfo_Impl {
 
     /// DisplayAttributeを取得する。
     ///
-    /// # 引数
+    /// 引数:
     /// * `pda`: DisplayAttribute
     ///
-    /// # 戻り値
+    /// 戻り値:
     /// * `Ok(())`: 成功した場合
     /// * `Err(E_FAIL)`: 失敗した場合
     fn GetAttributeInfo(&self, pda: *mut TF_DISPLAYATTRIBUTE) -> WinResult<()> {
@@ -132,10 +132,10 @@ impl ITfDisplayAttributeInfo_Impl for DisplayAttributeInfo_Impl {
 
     /// DisplayAttributeを設定する。
     ///
-    /// # 引数
+    /// 引数:
     /// * `_pda`: DisplayAttribute
     ///
-    /// # 戻り値
+    /// 戻り値:
     /// * `Ok(())`: 成功した場合
     /// * `Err(E_NOTIMPL)`: 失敗した場合
     fn SetAttributeInfo(&self, _pda: *const TF_DISPLAYATTRIBUTE) -> WinResult<()> {
@@ -144,7 +144,7 @@ impl ITfDisplayAttributeInfo_Impl for DisplayAttributeInfo_Impl {
 
     /// Resetする。
     ///
-    /// # 戻り値
+    /// 戻り値:
     /// * `Ok(())`: 成功した場合
     /// * `Err(E_FAIL)`: 失敗した場合
     fn Reset(&self) -> WinResult<()> {
@@ -176,7 +176,7 @@ impl EnumDisplayAttributeInfo {
 impl IEnumTfDisplayAttributeInfo_Impl for EnumDisplayAttributeInfo_Impl {
     /// Cloneする。
     ///
-    /// # 戻り値
+    /// 戻り値:
     /// * `Ok(IEnumTfDisplayAttributeInfo)`: Cloneしたオブジェクト
     /// * `Err(E_FAIL)`: 失敗した場合
     fn Clone(&self) -> WinResult<IEnumTfDisplayAttributeInfo> {
@@ -188,12 +188,12 @@ impl IEnumTfDisplayAttributeInfo_Impl for EnumDisplayAttributeInfo_Impl {
 
     /// 次の要素を取得する。
     ///
-    /// # 引数
+    /// 引数:
     /// * `count`: 取得する要素数
     /// * `rginfo`: 要素を格納するバッファ
     /// * `pcfetched`: 実際に取得した要素数
     ///
-    /// # 戻り値
+    /// 戻り値:
     /// * `Ok(())`: 成功した場合
     /// * `Err(E_FAIL)`: 失敗した場合
     fn Next(
@@ -237,7 +237,7 @@ impl IEnumTfDisplayAttributeInfo_Impl for EnumDisplayAttributeInfo_Impl {
 
     /// リセットする。
     ///
-    /// # 戻り値
+    /// 戻り値:
     /// * `Ok(())`: 成功した場合
     /// * `Err(E_FAIL)`: 失敗した場合
     fn Reset(&self) -> WinResult<()> {
@@ -247,10 +247,10 @@ impl IEnumTfDisplayAttributeInfo_Impl for EnumDisplayAttributeInfo_Impl {
 
     /// スキップする。
     ///
-    /// # 引数
+    /// 引数:
     /// * `count`: スキップする要素数
     ///
-    /// # 戻り値
+    /// 戻り値:
     /// * `Ok(())`: 成功した場合
     /// * `Err(E_FAIL)`: 失敗した場合
     fn Skip(&self, count: u32) -> WinResult<()> {
@@ -278,10 +278,10 @@ impl DisplayAttributeProvider {
 
     /// 指定されたGUIDに対応するDisplayAttributeを取得する。
     ///
-    /// # 引数
+    /// 引数:
     /// * `guid`: GUID
     ///
-    /// # 戻り値
+    /// 戻り値:
     /// * `Ok(ITfDisplayAttributeInfo)`: DisplayAttribute
     /// * `Err(E_FAIL)`: 失敗した場合
     pub fn get_info(guid: *const GUID) -> WinResult<ITfDisplayAttributeInfo> {
@@ -304,7 +304,7 @@ impl DisplayAttributeProvider {
 impl ITfDisplayAttributeProvider_Impl for DisplayAttributeProvider_Impl {
     /// EnumDisplayAttributeInfoを取得する。
     ///
-    /// # 戻り値
+    /// 戻り値:
     /// * `Ok(IEnumTfDisplayAttributeInfo)`: EnumDisplayAttributeInfo
     /// * `Err(E_FAIL)`: 失敗した場合
     fn EnumDisplayAttributeInfo(&self) -> WinResult<IEnumTfDisplayAttributeInfo> {
@@ -313,10 +313,10 @@ impl ITfDisplayAttributeProvider_Impl for DisplayAttributeProvider_Impl {
 
     /// DisplayAttributeInfoを取得する。
     ///
-    /// # 引数
+    /// 引数:
     /// * `guid`: GUID
     ///
-    /// # 戻り値
+    /// 戻り値:
     /// * `Ok(ITfDisplayAttributeInfo)`: DisplayAttribute
     /// * `Err(E_FAIL)`: 失敗した場合
     fn GetDisplayAttributeInfo(&self, guid: *const GUID) -> WinResult<ITfDisplayAttributeInfo> {
@@ -326,13 +326,13 @@ impl ITfDisplayAttributeProvider_Impl for DisplayAttributeProvider_Impl {
 
 /// CompositionのRangeに指定したDisplay Attributeを設定する。
 ///
-/// # 引数
+/// 引数:
 /// * `context`: Context
 /// * `ec`: EditContext
 /// * `range`: Range
 /// * `attr_guid`: Attribute GUID
 ///
-/// # 戻り値
+/// 戻り値:
 /// * `Ok(())`: 成功した場合
 /// * `Err(E_FAIL)`: 失敗した場合
 pub fn set_display_attribute(
@@ -370,12 +370,12 @@ pub fn set_display_attribute(
 
 /// CompositionのRangeからDisplay Attributeをクリアする。
 ///
-/// # 引数
+/// 引数:
 /// * `context`: Context
 /// * `ec`: EditContext
 /// * `range`: Range
 ///
-/// # 戻り値
+/// 戻り値:
 /// * `Ok(())`: 成功した場合
 /// * `Err(E_FAIL)`: 失敗した場合
 pub fn clear_display_attribute(

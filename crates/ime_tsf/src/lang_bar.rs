@@ -23,11 +23,11 @@ const LF_FACESIZE: usize = 32; // フォントフェイス名の最大バイト�
 
 /// 入力モードに対応する表示情報
 ///
-/// # 引数
+/// 引数:
 /// * `mode`: 入力モード
 /// * `is_open`: IMEがONかどうか
 ///
-/// # 戻り値
+/// 戻り値:
 /// * `(&'static str, &'static str)`: (表示用テキスト, ツールチップ文字列)
 pub(crate) fn mode_to_info(
     mode: InputMode,

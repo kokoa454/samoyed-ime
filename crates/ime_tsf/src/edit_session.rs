@@ -2,14 +2,16 @@ use std::mem::ManuallyDrop;
 use std::ptr::null;
 use std::sync::{Arc, Mutex};
 
-use windows::core::{implement, Ref, Result as WinResult, Interface};
+use windows::core::{implement, BOOL, Ref, Result as WinResult, Interface};
 use windows::Win32::UI::TextServices::{
     ITfComposition, ITfCompositionSink, ITfCompositionSink_Impl, ITfContext, ITfContextComposition, ITfEditSession, ITfEditSession_Impl,
-    TF_ANCHOR_END, TF_ANCHOR_START, TF_SELECTION,
+    ITfUIElement, ITfUIElementMgr, TF_ANCHOR_END, TF_ANCHOR_START, TF_SELECTION,
 };
 use ime_core::{ImeState, InputMode, ModeCommand};
 
 use crate::display_attribute::{clear_display_attribute, set_display_attribute, GUID_SAMOYED_DISPLAY_ATTR_INPUT};
+use crate::candidate_ui::CandidateListUi;
+use crate::candidate_window;
 use crate::text_input_processor::SharedState;
 use crate::logging::log;
 
@@ -35,10 +37,11 @@ pub enum EditAction {
 /// Composition終了通知Sink
 #[implement(ITfCompositionSink)]
 pub struct SamoyedIMECompositionSink {
-    state: Arc<Mutex<SharedState>>,
+    state: Arc<Mutex<SharedState>>, // 共有状態
 }
 
 impl SamoyedIMECompositionSink {
+    /// コンストラクタ。
     pub fn new(
         state: Arc<Mutex<SharedState>>,
     ) -> Self {
@@ -53,11 +56,11 @@ impl ITfCompositionSink_Impl
 {
     /// Compositionが終了したときに呼ばれる。
     ///
-    /// # 引数
+    /// 引数
     /// * `_ecwrite`: EditContextのライトフラグ
     /// * `_pcomposition`: Compositionオブジェクト
     ///
-    /// # 戻り値
+    /// 戻り値
     /// * `Ok(())`: 成功した場合
     /// * `Err(E_FAIL)`: 失敗した場合
     fn OnCompositionTerminated(
@@ -66,6 +69,7 @@ impl ITfCompositionSink_Impl
         _pcomposition: Ref<'_, ITfComposition>,
     ) -> WinResult<()> {
         log("[SamoyedIME] OnCompositionTerminated");
+        candidate_window::hide();
 
         let mut state = self.state.lock().unwrap();
 
@@ -104,10 +108,10 @@ impl SamoyedIMEEditSession {
 impl ITfEditSession_Impl for SamoyedIMEEditSession_Impl {
     /// EditSession本体
     ///
-    /// # 引数
+    /// 引数
     /// * `ec`: EditContext
     ///
-    /// # 戻り値
+    /// 戻り値
     /// * `Ok(())`: 成功した場合
     /// * `Err(E_FAIL)`: 失敗した場合
     fn DoEditSession(
@@ -240,11 +244,11 @@ impl ITfEditSession_Impl for SamoyedIMEEditSession_Impl {
 impl SamoyedIMEEditSession {
     /// IME状態を更新し、Compositionへ反映する。
     ///
-    /// # 引数
+    /// 引数
     /// * `ec`: EditContext
     /// * `update`: IME状態を更新する処理
     ///
-    /// # 戻り値
+    /// 戻り値
     /// * `Ok(())`: 成功した場合
     /// * `Err(E_FAIL)`: 失敗した場合
     unsafe fn update_state_and_text<F>(
@@ -287,7 +291,11 @@ impl SamoyedIMEEditSession {
             // Pending入力だけが変化した場合
             if next_text.is_empty() {
                 let mut state = self.state.lock().unwrap();
-                state.ime_state = next_state;
+                state.ime_state = next_state.clone();
+                drop(state);
+                if let Err(error) = self.sync_candidate_ui(&next_state) {
+                    log(&format!("[SamoyedIME] Candidate UI sync failed: {:?}", error));
+                }
 
                 log("[SamoyedIME] IME state updated without Composition");
 
@@ -302,10 +310,26 @@ impl SamoyedIMEEditSession {
                 )?
             };
 
+            let composition_for_window = composition.clone();
             let mut state = self.state.lock().unwrap();
 
             state.composition = Some(composition);
-            state.ime_state = next_state;
+            state.ime_state = next_state.clone();
+            drop(state);
+            if !next_state.get_dictionary_candidates().is_empty() {
+                if let Err(error) = candidate_window::show(
+                    &self.context,
+                    ec,
+                    &composition_for_window,
+                    next_state.get_dictionary_candidates(),
+                    next_state.get_dictionary_candidate_index().unwrap_or(0),
+                ) {
+                    log(&format!("[SamoyedIME] Native candidate window failed: {:?}", error));
+                }
+            }
+            if let Err(error) = self.sync_candidate_ui(&next_state) {
+                log(&format!("[SamoyedIME] Candidate UI sync failed: {:?}", error));
+            }
 
             return Ok(());
         }
@@ -324,7 +348,12 @@ impl SamoyedIMEEditSession {
             let mut state = self.state.lock().unwrap();
 
             state.composition = None;
-            state.ime_state = next_state;
+            state.ime_state = next_state.clone();
+            drop(state);
+            candidate_window::hide();
+            if let Err(error) = self.sync_candidate_ui(&next_state) {
+                log(&format!("[SamoyedIME] Candidate UI sync failed: {:?}", error));
+            }
 
             return Ok(());
         }
@@ -360,20 +389,146 @@ impl SamoyedIMEEditSession {
 
         let mut state = self.state.lock().unwrap();
 
-        state.composition = Some(composition);
-        state.ime_state = next_state;
+        state.composition = Some(composition.clone());
+        state.ime_state = next_state.clone();
+        drop(state);
+        if next_state.get_dictionary_candidates().is_empty() {
+            candidate_window::hide();
+        } else if let Err(error) = candidate_window::show(
+            &self.context,
+            ec,
+            &composition,
+            next_state.get_dictionary_candidates(),
+            next_state.get_dictionary_candidate_index().unwrap_or(0),
+        ) {
+            log(&format!("[SamoyedIME] Native candidate window failed: {:?}", error));
+        }
+        if let Err(error) = self.sync_candidate_ui(&next_state) {
+            log(&format!("[SamoyedIME] Candidate UI sync failed: {:?}", error));
+        }
 
+        Ok(())
+    }
+
+    /// 候補一覧UIを現在のime_core状態へ同期する。
+    /// 
+    /// 引数:
+    /// * `ime_state`: 現在のime_core状態
+    /// 戻り値:
+    /// * `Ok(())`: 成功した場合
+    /// * `Err(E_FAIL)`: 失敗した場合
+    fn sync_candidate_ui(&self, ime_state: &ImeState) -> WinResult<()> {
+        let candidates = ime_state.get_dictionary_candidates();
+        let selection = ime_state.get_dictionary_candidate_index();
+        log(&format!(
+            "[SamoyedIME] Candidate UI sync: count={}, selection={:?}",
+            candidates.len(),
+            selection
+        ));
+        let (thread_mgr, current_id, current_state) = {
+            let state = self.state.lock().unwrap();
+            (
+                state.thread_mgr.clone(),
+                state.candidate_ui_id,
+                state.candidate_ui_state.clone(),
+            )
+        };
+
+        let Some(thread_mgr) = thread_mgr else {
+            log("[SamoyedIME] Candidate UI sync skipped: no thread manager");
+            return Ok(());
+        };
+        let ui_manager: ITfUIElementMgr = match thread_mgr.cast() {
+            Ok(manager) => manager,
+            Err(error) => {
+                log(&format!("[SamoyedIME] Candidate UI manager cast failed: {:?}", error));
+                return Err(error);
+            }
+        };
+
+        if !candidates.is_empty() {
+            if let (Some(id), Some(current_state)) = (current_id, current_state) {
+                CandidateListUi::update(
+                    &current_state,
+                    candidates.to_vec(),
+                    selection.unwrap_or(0),
+                );
+                unsafe { ui_manager.UpdateUIElement(id)? };
+                return Ok(());
+            }
+
+            let document_mgr = unsafe { self.context.GetDocumentMgr()? };
+            let (candidate_element, candidate_state) = CandidateListUi::new(
+                document_mgr,
+                candidates.to_vec(),
+                selection.unwrap_or(0),
+            );
+            let ui_element: ITfUIElement = candidate_element.cast()?;
+            let mut show = BOOL(1);
+            let mut id = 0u32;
+            if let Err(error) = unsafe { ui_manager.BeginUIElement(&ui_element, &mut show, &mut id) } {
+                log(&format!("[SamoyedIME] BeginUIElement failed: {:?}", error));
+                return Err(error);
+            }
+            log(&format!(
+                "[SamoyedIME] Candidate UI started: id={}, show={}",
+                id,
+                show.as_bool()
+            ));
+            if show.as_bool() {
+                unsafe { ui_element.Show(true)? };
+            }
+
+            let mut state = self.state.lock().unwrap();
+            state.candidate_ui = Some(candidate_element);
+            state.candidate_ui_state = Some(candidate_state);
+            state.candidate_ui_id = Some(id);
+            return Ok(());
+        }
+
+        if let Some(id) = current_id {
+            unsafe { ui_manager.EndUIElement(id)? };
+            let mut state = self.state.lock().unwrap();
+            state.candidate_ui = None;
+            state.candidate_ui_state = None;
+            state.candidate_ui_id = None;
+        }
+
+        Ok(())
+    }
+
+    /// 候補一覧UIを終了する。
+    /// 
+    /// 戻り値:
+    /// * `Ok(())`: 成功した場合
+    /// * `Err(E_FAIL)`: 失敗した場合
+    fn end_candidate_ui(&self) -> WinResult<()> {
+        candidate_window::hide();
+        let (thread_mgr, id) = {
+            let state = self.state.lock().unwrap();
+            (state.thread_mgr.clone(), state.candidate_ui_id)
+        };
+
+        if let (Some(thread_mgr), Some(id)) = (thread_mgr, id) {
+            let ui_manager: ITfUIElementMgr = thread_mgr.cast()?;
+            unsafe { ui_manager.EndUIElement(id)? };
+        }
+
+        let mut state = self.state.lock().unwrap();
+        state.candidate_ui = None;
+        state.candidate_ui_state = None;
+        state.candidate_ui_id = None;
         Ok(())
     }
 
     /// Compositionを開始する。
     ///
-    /// # 引数
+    /// 引数
     /// * `ec`: EditContext
     /// * `text`: 未確定文字列
     /// * `cursor_pos`: カーソル位置
     ///
-    /// # 戻り値
+    /// 戻り値
     /// * `ITfComposition`: 開始したComposition
     unsafe fn start_composition(
         &self,
@@ -437,12 +592,12 @@ impl SamoyedIMEEditSession {
 
     /// Compositionのテキストを更新する。
     ///
-    /// # 引数
+    /// 引数
     /// * `ec`: EditContext
     /// * `composition`: Composition
     /// * `text`: 未確定文字列
     ///
-    /// # 戻り値
+    /// 戻り値
     /// * `Ok(())`: 成功した場合
     /// * `Err(E_FAIL)`: 失敗した場合
     unsafe fn set_composition_text(
@@ -482,11 +637,11 @@ impl SamoyedIMEEditSession {
 
     /// Compositionのテキストを削除する。
     ///
-    /// # 引数
+    /// 引数
     /// * `ec`: EditContext
     /// * `composition`: Composition
     ///
-    /// # 戻り値
+    /// 戻り値
     /// * `Ok(())`: 成功した場合
     /// * `Err(E_FAIL)`: 失敗した場合
     unsafe fn clear_composition_text(
@@ -505,15 +660,15 @@ impl SamoyedIMEEditSession {
 
     /// Selectionを更新する。
     ///
-    /// # Arguments
+    /// 引数:
     /// * `context` - Context
     /// * `ec` - EditContext
     /// * `composition` - Composition
     /// * `cursor_pos_utf16` - UTF-16単位のカーソル位置
     ///
-    /// # Returns
-    /// * `Ok(())` - Success
-    /// * `Err(E_FAIL)` - Failure
+    /// 戻り値:
+    /// * `Ok(())` : 成功した場合
+    /// * `Err(E_FAIL)` : 失敗した場合
     unsafe fn update_selection(
         context: &ITfContext,
         ec: u32,
@@ -585,11 +740,11 @@ impl SamoyedIMEEditSession {
 
     /// 文字単位のカーソル位置をUTF-16単位へ変換する。
     ///
-    /// # 引数
+    /// 引数
     /// * `text`: テキスト
     /// * `cursor_pos`: 文字単位のカーソル位置
     ///
-    /// # 戻り値
+    /// 戻り値
     /// * `usize`: UTF-16単位のカーソル位置
     fn cursor_pos_to_utf16(
         text: &str,
@@ -603,13 +758,14 @@ impl SamoyedIMEEditSession {
 
     /// テキストを確定する。
     ///
-    /// # 引数
+    /// 引数
     /// * `ec`: EditContext
     ///
-    /// # 戻り値
+    /// 戻り値
     /// * `Ok(())`: 成功した場合
     /// * `Err(_)`: 失敗した場合
     unsafe fn commit(&self, ec: u32) -> WinResult<()> {
+        self.end_candidate_ui()?;
         let composition = {
             let state = self.state.lock().unwrap();
             state.composition.clone()
@@ -634,16 +790,17 @@ impl SamoyedIMEEditSession {
 
     /// テキストを削除する。
     ///
-    /// # Arguments
+    /// 引数
     /// * `ec` - EditContext
     ///
-    /// # Returns
-    /// * `Ok(())` - Success
-    /// * `Err(E_FAIL)` - Failure
+    /// 戻り値
+    /// * `Ok(())` : 成功した場合
+    /// * `Err(E_FAIL)` : 失敗した場合
     unsafe fn clear(
         &self,
         ec: u32,
     ) -> WinResult<()> {
+        self.end_candidate_ui()?;
         let composition = {
             let state = self.state.lock().unwrap();
             state.composition.clone()
@@ -667,11 +824,11 @@ impl SamoyedIMEEditSession {
 
     /// IMEの開閉状態を変更する。
     ///
-    /// # 引数
+    /// 引数
     /// * `ec`: EditContext
     /// * `is_open`: 新しい開閉状態
     ///
-    /// # 戻り値
+    /// 戻り値
     /// * `Ok(())`: 成功した場合
     /// * `Err(_)`: 確定またはコンパートメント更新に失敗した場合
     unsafe fn set_open(

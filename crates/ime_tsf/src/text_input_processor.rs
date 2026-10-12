@@ -8,6 +8,7 @@ use windows::Win32::Foundation::E_FAIL;
 use windows::Win32::System::Variant::VARIANT;
 use windows::Win32::UI::TextServices::{
     GUID_COMPARTMENT_KEYBOARD_OPENCLOSE, ITfCompartmentMgr, ITfComposition, ITfContext,
+    ITfCandidateListUIElement,
     ITfDisplayAttributeInfo, ITfDisplayAttributeProvider, ITfDisplayAttributeProvider_Impl,
     ITfEditSession, ITfKeyEventSink, ITfKeystrokeMgr, ITfLangBarItem, ITfLangBarItemMgr,
     ITfLangBarItemSink, ITfTextInputProcessor, ITfTextInputProcessor_Impl,
@@ -15,6 +16,8 @@ use windows::Win32::UI::TextServices::{
 };
 
 use crate::display_attribute::{DisplayAttributeProvider, EnumDisplayAttributeInfo};
+use crate::candidate_ui::CandidateUiState;
+use crate::candidate_window;
 use crate::edit_session::{EditAction, SamoyedIMEEditSession};
 use crate::key_event_sink::KeyEventSink;
 use crate::lang_bar::SamoyedLangBarItem;
@@ -46,6 +49,9 @@ impl TextService {
                 eaten_keys: HashSet::new(),
                 is_open: true,
                 lang_bar_item_sink: None,
+                candidate_ui: None,
+                candidate_ui_state: None,
+                candidate_ui_id: None,
             })),
             lang_bar_item: Mutex::new(None),
         }
@@ -55,7 +61,7 @@ impl TextService {
 impl Drop for TextService {
     /// TextServiceのDrop実装
     ///
-    /// # 戻り値
+    /// 戻り値:
     /// * `Ok(())`: 成功した場合
     /// * `Err(E_UNEXPECTED)`: 失敗した場合
     fn drop(&mut self) {
@@ -68,11 +74,11 @@ impl Drop for TextService {
 impl ITfTextInputProcessor_Impl for TextService_Impl {
     /// Text Serviceを有効化する。
     ///
-    /// # 引数
+    /// 引数:
     /// * `ptim`: Thread Manager*
     /// * `tid`: Thread ID*
     ///
-    /// # 戻り値
+    /// 戻り値:
     /// * `Ok(())`: 成功した場合
     /// * `Err(E_INVALIDARG)`: 引数が無効な場合
     /// * `Err(E_UNEXPECTED)`: 予期しないエラーが発生した場合
@@ -127,16 +133,21 @@ impl ITfTextInputProcessor_Impl for TextService_Impl {
 
         log("[SamoyedIME] KeyEventSink::Advised");
 
+        if let Err(error) = candidate_window::initialize() {
+            log(&format!("[SamoyedIME] Candidate window initialization failed: {:?}", error));
+        }
+
         Ok(())
     }
 
     /// Text Serviceを無効化する。
     ///
-    /// # 戻り値
+    /// 戻り値:
     /// * `Ok(())`: 成功した場合
     /// * `Err(E_UNEXPECTED)`: 失敗した場合
     fn Deactivate(&self) -> WinResult<()> {
         log("[SamoyedIME] TextService::Deactivate");
+        candidate_window::shutdown();
 
         // LangBarItemをTSFから削除
         let thread_mgr = {
@@ -183,7 +194,7 @@ impl ITfTextInputProcessor_Impl for TextService_Impl {
 impl ITfDisplayAttributeProvider_Impl for TextService_Impl {
     /// EnumDisplayAttributeInfoを取得する。
     ///
-    /// # 戻り値
+    /// 戻り値:
     /// * `Ok(IEnumTfDisplayAttributeInfo)`: EnumDisplayAttributeInfo
     /// * `Err(E_FAIL)`: 失敗した場合
     fn EnumDisplayAttributeInfo(&self) -> WinResult<IEnumTfDisplayAttributeInfo> {
@@ -192,10 +203,10 @@ impl ITfDisplayAttributeProvider_Impl for TextService_Impl {
 
     /// DisplayAttributeInfoを取得する。
     ///
-    /// # 引数
+    /// 引数:
     /// * `guid`: GUID
     ///
-    /// # 戻り値
+    /// 戻り値:
     /// * `Ok(ITfDisplayAttributeInfo)`: DisplayAttribute
     /// * `Err(E_FAIL)`: 失敗した場合
     fn GetDisplayAttributeInfo(&self, guid: *const GUID) -> WinResult<ITfDisplayAttributeInfo> {
@@ -213,19 +224,19 @@ pub struct SharedState {
     pub eaten_keys: HashSet<u16>, // 入力済みのキー
     pub is_open: bool, // キーボードが開いているかどうか
     pub lang_bar_item_sink: Option<ITfLangBarItemSink>, // LangBarItem
+    pub candidate_ui: Option<ITfCandidateListUIElement>, // 候補一覧UI
+    pub candidate_ui_state: Option<Arc<Mutex<CandidateUiState>>>, // 候補一覧データ
+    pub candidate_ui_id: Option<u32>, // TSF UI element ID
 }
 
 impl SharedState {
     /// TSFのキーボード開閉状態を設定し、ローカル状態も同時に更新する。
     ///
-    /// コンパートメントの更新に失敗した場合はローカル状態も変更しない。
-    /// 両者が食い違うと、Windowsの表示と実際の入力動作が一致しなくなる。
-    ///
-    /// # 引数
+    /// 引数:
     /// * `state`: TextServiceの共有状態
     /// * `is_open`: 新しいキーボード開閉状態
     ///
-    /// # 戻り値
+    /// 戻り値:
     /// * `Ok(())`: 成功した場合
     /// * `Err(E_FAIL)`: Client IDまたはThread Managerが未設定の場合
     pub(crate) fn set_keyboard_open(
@@ -269,12 +280,12 @@ impl SharedState {
 
     /// EditSessionを要求する。
     ///
-    /// # 引数
+    /// 引数:
     /// * `state`: TextServiceの共有状態
     /// * `context`: Context
     /// * `action`: EditSessionで実行する操作
     ///
-    /// # 戻り値
+    /// 戻り値:
     /// * `Ok(())`: EditSessionの要求に成功した場合
     /// * `Err(E_FAIL)`: Client IDが設定されていない場合
     pub(crate) fn request_edit_session(
@@ -320,7 +331,7 @@ impl SharedState {
 
     /// 言語バーの表示更新通知をOS（TSF）へ送る。
     ///
-    /// # 引数
+    /// 引数:
     /// * `state`: TextServiceの共有状態
     pub(crate) fn notify_lang_bar_update(state: &Arc<Mutex<Self>>) {
         let state = state.lock().unwrap();

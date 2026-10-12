@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use crate::composition::Composition;
 use crate::dictionary::Dictionary;
 use crate::mode_converter::{
@@ -361,10 +363,14 @@ impl ImeState {
 
         if !is_shift && self.input_mode == InputMode::Hiragana && self.has_composition() {
             let reading: String = self.composition.get_content_units().iter().collect();
+            let mut seen_surfaces = HashSet::new();
             let candidates: Vec<String> = Dictionary::embedded()
                 .lookup(&reading)
                 .iter()
-                .map(|entry| entry.surface.clone())
+                .filter_map(|entry| {
+                    let surface = entry.surface.clone();
+                    seen_surfaces.insert(surface.clone()).then_some(surface)
+                })
                 .collect();
 
             if !candidates.is_empty() {
@@ -430,6 +436,18 @@ impl ImeState {
     /// * `bool`: 入力中の文字が存在する場合はtrue
     pub fn has_active_input(&self) -> bool {
         self.has_composition() || self.has_pending_input()
+    }
+
+    /// 現在の辞書変換候補を取得する。
+    pub fn get_dictionary_candidates(&self) -> &[String] {
+        &self.dictionary_candidates
+    }
+
+    /// 現在選択されている辞書候補の位置を取得する。
+    pub fn get_dictionary_candidate_index(&self) -> Option<usize> {
+        self.dictionary_reading
+            .as_ref()
+            .map(|_| self.dictionary_candidate_index)
     }
 
     /// Backspaceを実行する。

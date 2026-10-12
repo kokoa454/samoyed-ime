@@ -1,4 +1,6 @@
 mod class_factory;
+mod candidate_ui;
+mod candidate_window;
 mod key_event_sink;
 mod text_input_processor;
 mod logging;

@@ -161,10 +161,10 @@ pub fn half_width_katakana_to_full_width_katakana(text: &str) -> String {
 
 /// ひらがなをローマ字（半角英数）に変換する。
 ///
-/// # 引数
+/// 引数:
 /// * `text`: 変換する文字列
 ///
-/// # 戻り値
+/// 戻り値:
 /// * `String`: 変換後のローマ字文字列
 pub fn hiragana_to_romaji(text: &str) -> String {
     let mut result = String::new();
@@ -231,10 +231,10 @@ pub fn hiragana_to_romaji(text: &str) -> String {
 
 /// ローマ字（半角英数）をひらがなに変換する。
 ///
-/// # 引数
+/// 引数:
 /// * `text`: 変換する文字列
 ///
-/// # 戻り値
+/// 戻り値:
 /// * `String`: 変換後のひらがな文字列
 pub fn romaji_to_hiragana(text: &str) -> String {
     let mut romaji_input = RomajiInput::new();

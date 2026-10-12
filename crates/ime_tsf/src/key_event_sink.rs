@@ -37,7 +37,7 @@ impl KeyEventSink {
 
     /// 直近のトグルから十分な時間が経っていれば true を返し、記録を更新する。
     /// 
-    /// # 戻り値
+    /// 戻り値:
     /// * `true`: 十分な時間が経過している場合
     /// * `false`: 十分な時間が経過していない場合
     fn should_toggle_now(&self) -> bool {
@@ -56,11 +56,11 @@ impl KeyEventSink {
 
     /// 現在のIME状態から、キーに対応するEditActionを取得する。
     ///
-    /// # 引数
+    /// 引数:
     /// * `vk`: Virtual Key code
     /// * `lparam`: キーイベントのLPARAM
     ///
-    /// # 戻り値
+    /// 戻り値:
     /// * `Some(EditAction)`: IMEが処理するキーの場合
     /// * `None`: IMEが処理しないキーの場合
     fn get_key_action(
@@ -107,7 +107,7 @@ impl KeyEventSink {
 
     /// IMEの開閉状態を切り替える。
     ///
-    /// # 引数
+    /// 引数:
     /// * `pic`: Context
     /// * `target_mode`: 開く際に設定する入力モード
     fn toggle_open(&self, pic: Ref<'_, ITfContext>, target_mode: Option<InputMode>) {
@@ -154,12 +154,12 @@ impl KeyEventSink {
 impl ITfKeyEventSink_Impl for KeyEventSink_Impl {
     /// キーが押されたときに呼ばれる。
     ///
-    /// # 引数
+    /// 引数:
     /// * `pic`: Context
     /// * `wparam`: WPARAM
     /// * `lparam`: LPARAM
     ///
-    /// # 戻り値
+    /// 戻り値:
     /// * `Ok(BOOL(0))`: キーを処理しなかった場合
     /// * `Ok(BOOL(1))`: キーを処理した場合
     /// * `Err(E_UNEXPECTED)`: 予期しないエラーが発生した場合
@@ -261,12 +261,12 @@ impl ITfKeyEventSink_Impl for KeyEventSink_Impl {
 
     /// キーが離されたときに呼ばれる。
     ///
-    /// # 引数
+    /// 引数:
     /// * `pic`: Context
     /// * `wparam`: WPARAM
     /// * `_lparam`: LPARAM
     ///
-    /// # 戻り値
+    /// 戻り値:
     /// * `Ok(BOOL(0))`: キーを処理しなかった場合
     /// * `Ok(BOOL(1))`: キーを処理した場合
     /// * `Err(E_UNEXPECTED)`: 予期しないエラーが発生した場合
@@ -308,12 +308,12 @@ impl ITfKeyEventSink_Impl for KeyEventSink_Impl {
 
     /// キーがIMEによって処理されるかをテストする。
     ///
-    /// # 引数
+    /// 引数:
     /// * `_pic`: Context
     /// * `wparam`: WPARAM
     /// * `lparam`: LPARAM
     ///
-    /// # 戻り値
+    /// 戻り値:
     /// * `Ok(BOOL(0))`: キーを処理しなかった場合
     /// * `Ok(BOOL(1))`: キーを処理した場合
     /// * `Err(E_UNEXPECTED)`: 予期しないエラーが発生した場合
@@ -350,12 +350,12 @@ impl ITfKeyEventSink_Impl for KeyEventSink_Impl {
 
     /// KeyUpの処理対象かをテストする。
     ///
-    /// # 引数
+    /// 引数:
     /// * `_pic`: Context
     /// * `wparam`: WPARAM
     /// * `_lparam`: LPARAM
     ///
-    /// # 戻り値
+    /// 戻り値:
     /// * `Ok(BOOL(0))`: キーを処理しなかった場合
     /// * `Ok(BOOL(1))`: キーを処理した場合
     /// * `Err(E_UNEXPECTED)`: 予期しないエラーが発生した場合
@@ -386,11 +386,11 @@ impl ITfKeyEventSink_Impl for KeyEventSink_Impl {
 
     /// Preserved Keyが押されたときに呼ばれる。
     ///
-    /// # 引数
+    /// 引数:
     /// * `_pic`: Context
     /// * `_rguid`: Preserved KeyのGUID
     ///
-    /// # 戻り値
+    /// 戻り値:
     /// * `Ok(BOOL(0))`: キーを処理しなかった場合
     /// * `Ok(BOOL(1))`: キーを処理した場合
     /// * `Err(E_UNEXPECTED)`: 予期しないエラーが発生した場合
@@ -404,10 +404,10 @@ impl ITfKeyEventSink_Impl for KeyEventSink_Impl {
 
     /// フォーカスが変更されたときに呼ばれる。
     ///
-    /// # 引数
+    /// 引数:
     /// * `_fforeground`: TRUEならフォアグラウンド、FALSEならバックグラウンド
     ///
-    /// # 戻り値
+    /// 戻り値:
     /// * `Ok(())`: 成功した場合
     /// * `Err(E_UNEXPECTED)`: 失敗した場合
     fn OnSetFocus(&self, _fforeground: BOOL) -> WinResult<()> {
@@ -417,11 +417,11 @@ impl ITfKeyEventSink_Impl for KeyEventSink_Impl {
 
 /// Virtual Key codeから実際の入力文字へ変換する。
 ///
-/// # 引数
+/// 引数:
 /// * `vk`: Virtual Key code
 /// * `lparam`: キーイベントのLPARAM
 ///
-/// # 戻り値
+/// 戻り値:
 /// * `Some(char)`: 変換できた入力文字
 /// * `None`: IMEで処理しないキーの場合
 fn vk_to_input_char(
@@ -509,7 +509,7 @@ fn vk_to_input_char(
 
 /// Shift以外の修飾キーが押下されているかを取得する。
 ///
-/// # 戻り値
+/// 戻り値:
 /// * `true`: 修飾キーが押下されている場合
 /// * `false`: 修飾キーが押下されていない場合
 fn has_non_shift_blocking_modifier() -> bool {
@@ -523,7 +523,7 @@ fn has_non_shift_blocking_modifier() -> bool {
 
 /// Shiftキーが押下されているかを取得する。
 ///
-/// # 戻り値
+/// 戻り値:
 /// * `true`: Shiftキーが押下されている場合
 /// * `false`: Shiftキーが押下されていない場合
 fn is_shift_down() -> bool {
@@ -534,7 +534,7 @@ fn is_shift_down() -> bool {
 
 /// 修飾キーが押下されているかを取得する。
 ///
-/// # 戻り値
+/// 戻り値:
 /// * `true`: 修飾キーが押下されている場合
 /// * `false`: 修飾キーが押下されていない場合
 fn has_blocking_modifier() -> bool {
@@ -549,16 +549,10 @@ fn has_blocking_modifier() -> bool {
 
 /// IMEの開閉を切り替えるキーかどうかを判定する。
 ///
-/// # 引数
+/// 引数:
 /// * `vk`: Virtual Key code
 ///
-/// # 戻り値
-/// IMEの開閉を切り替えるキーかどうかを判定する。
-///
-/// # 引数
-/// * `vk`: Virtual Key code
-///
-/// # 戻り値
+/// 戻り値:
 /// * `true`: IMEの開閉を切り替えるキーの場合
 /// * `false`: IMEの開閉を切り替えないキーの場合
 fn is_toggle_key(vk: u16) -> bool {
@@ -567,15 +561,12 @@ fn is_toggle_key(vk: u16) -> bool {
 
 /// キーをIMEが処理すべきかを判定する。
 ///
-/// TSFやWindows APIに依存しない純粋関数にしておくことで、
-/// キー割り当ての仕様を単体テストで固定できる。
-///
-/// # 引数
+/// 引数:
 /// * `vk`: Virtual Key code
 /// * `is_open`: IMEがONかどうか
 /// * `has_active_input`: 未確定文字列または未変換ローマ字があるか
 ///
-/// # 戻り値
+/// 戻り値:
 /// * `Some(EditAction)`: IMEが処理するキーの場合
 /// * `None`: アプリへ渡すキーの場合
 pub(crate) fn route_edit_key(
@@ -593,10 +584,7 @@ pub(crate) fn route_edit_key(
         return None;
     }
 
-    // 未確定文字列がある間は、編集キーをアプリへ渡してはならない。
-    // アプリ側のテキストはCompositionそのものなので、
-    // アプリに処理させると内部状態と表示が食い違う。
-    // 実際に変化するかどうかは ime_core 側が no-op で吸収する。
+    // 未確定文字列がある間は、編集キーをアプリへ渡してはならない
     match vk {
         x if x == VK_BACK.0 => Some(EditAction::Backspace),
         x if x == VK_DELETE.0 => Some(EditAction::Delete),
@@ -616,18 +604,25 @@ pub(crate) fn route_edit_key(
 }
 
 /// ファンクションキー（F6〜F10）かどうかを判定する。
+/// 
+/// 引数:
+/// * `vk`: Virtual Key code
+///
+/// 戻り値:
+/// * `true`: ファンクションキーの場合
+/// * `false`: ファンクションキーでない場合
 fn is_function_key(vk: u16) -> bool {
     (VK_F6.0..=VK_F10.0).contains(&vk)
 }
 
 /// VKコードをモード切替コマンドへ変換する。
 ///
-/// # 引数
+/// 引数:
 /// * `vk`: Virtual Key code
 /// * `is_open`: IMEがONかどうか
 /// * `is_shift`: Shiftキーが押下されているかどうか
 ///
-/// # 戻り値
+/// 戻り値:
 /// * `Some(ModeCommand)`: モード切替コマンド
 /// * `None`: モード切替ではないキーの場合
 pub(crate) fn route_mode_key(vk: u16, is_open: bool, is_shift: bool) -> Option<ModeCommand> {
@@ -667,11 +662,11 @@ pub(crate) fn route_mode_key(vk: u16, is_open: bool, is_shift: bool) -> Option<M
 
 /// IMEがOFFのときに、IMEをONにするキーと開く対象の入力モードを判定する。
 ///
-/// # 引数
+/// 引数:
 /// * `vk`: Virtual Key code
 /// * `is_shift`: Shiftキーが押下されているかどうか
 ///
-/// # 戻り値
+/// 戻り値:
 /// * `Some(InputMode)`: IMEをONにし、設定すべき入力モード
 /// * `None`: IMEをONにしないキーの場合
 pub(crate) fn ime_on_target_mode(vk: u16, is_shift: bool) -> Option<ime_core::InputMode> {
@@ -694,11 +689,11 @@ pub(crate) fn ime_on_target_mode(vk: u16, is_shift: bool) -> Option<ime_core::In
 
 /// IMEがOFFのときに、IMEをONにするキーかどうか。
 ///
-/// # 引数
+/// 引数:
 /// * `vk`: Virtual Key code
 /// * `is_shift`: Shiftキーが押下されているかどうか
 ///
-/// # 戻り値
+/// 戻り値:
 /// * `true`: IMEをONにするキーの場合
 /// * `false`: IMEをONにしないキーの場合
 pub(crate) fn is_ime_on_key(vk: u16, is_shift: bool) -> bool {
@@ -1238,6 +1233,9 @@ mod tests {
             eaten_keys: std::collections::HashSet::new(),
             is_open: true,
             lang_bar_item_sink: None,
+            candidate_ui: None,
+            candidate_ui_state: None,
+            candidate_ui_id: None,
         };
         let state = std::sync::Arc::new(std::sync::Mutex::new(shared_state));
         let sink = KeyEventSink::new(state.clone());
