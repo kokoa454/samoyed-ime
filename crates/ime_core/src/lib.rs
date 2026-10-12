@@ -6,6 +6,7 @@ mod romaji_input;
 mod romaji_converter;
 mod hiragana_table;
 mod romaji_table;
+pub mod dictionary;
 
 pub use ime_state::ImeState;
 pub use ime_state::ModeCommand;
