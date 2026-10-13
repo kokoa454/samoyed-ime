@@ -276,7 +276,8 @@ impl ImeState {
     /// 戻り値
     /// * `String`: 画面に表示する文字列
     pub fn get_display_text(&self) -> String {
-        if self.conversion_mode.is_some() {
+        // 辞書候補または一時変換の結果は、再度モード変換しない
+        if self.conversion_mode.is_some() || self.dictionary_reading.is_some() {
             return self.composition.get_content_units().iter().collect();
         }
 
@@ -309,7 +310,8 @@ impl ImeState {
     /// 戻り値
     /// * `usize`: 表示テキスト上のカーソル位置（文字数単位）
     pub fn get_cursor_pos(&self) -> usize {
-        if self.conversion_mode.is_some() {
+        // 辞書候補または一時変換の結果は、再度モード変換しない
+        if self.conversion_mode.is_some() || self.dictionary_reading.is_some() {
             return self.composition.get_cursor_pos();
         }
 
