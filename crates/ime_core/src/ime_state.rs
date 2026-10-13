@@ -28,6 +28,13 @@ pub enum ModeCommand {
     ToggleAlphanumeric,      // 英数キー
 }
 
+/// 無効なローマ字が確定された直前の入力状態
+#[derive(Clone, PartialEq, Eq)]
+struct RomajiFallbackUndo {
+    composition: Composition,
+    romaji_input: RomajiInput,
+}
+
 /// IMEの状態を管理する構造体
 #[derive(Clone, PartialEq, Eq)]
 pub struct ImeState {
@@ -38,6 +45,7 @@ pub struct ImeState {
     dictionary_candidate_index: usize,  // 現在の候補位置
     composition: Composition,           // 現在の未確定文字列
     romaji_input: RomajiInput,          // ローマ字入力
+    last_romaji_fallback_undo: Option<RomajiFallbackUndo>, // 無効なローマ字が確定された直前の状態
 }
 
 impl ImeState {
@@ -51,6 +59,7 @@ impl ImeState {
             dictionary_candidate_index: 0,
             composition: Composition::new(),
             romaji_input: RomajiInput::new(),
+            last_romaji_fallback_undo: None,
         }
     }
 
@@ -67,6 +76,7 @@ impl ImeState {
     /// 引数
     /// * `mode`: 新しい入力モード
     pub fn set_input_mode(&mut self, mode: InputMode) {
+        self.last_romaji_fallback_undo = None;
         self.input_mode = mode;
     }
 
@@ -75,6 +85,8 @@ impl ImeState {
     /// 引数
     /// * `command`: モード切替コマンド
     pub fn apply_mode_command(&mut self, command: ModeCommand) {
+        self.last_romaji_fallback_undo = None;
+
         // 未変換ローマ字がある間はモードを変更しない
         if self.has_pending_input() {
             return;
@@ -116,6 +128,8 @@ impl ImeState {
     /// 引数
     /// * `target_mode`: 変換先の入力モード（文字種）
     pub fn convert_composition(&mut self, target_mode: InputMode) {
+        self.last_romaji_fallback_undo = None;
+
         if !self.has_active_input() {
             return;
         }
@@ -244,28 +258,54 @@ fn convert_text_to_mode(text: &str, target_mode: InputMode) -> String {
 impl ImeState {
     /// 文字を入力する。
     ///
-    /// 引数
+    /// 引数:
     /// * `input`: 入力文字
     ///
-    /// 戻り値
+    /// 戻り値:
     /// * `String`: 変換後の文字
     pub fn input_char(&mut self, input: char) -> String {
+        // 前回の復元情報は、今回の入力に対して一度だけ使用
+        self.last_romaji_fallback_undo = None;
+
         self.cancel_dictionary_conversion();
         self.conversion_mode = None;
 
+        // 入力前の状態を保存
+        let composition_before = self.composition.clone();
+        let romaji_before = self.romaji_input.clone();
+
+        let is_kana_mode = matches!(
+            self.input_mode,
+            InputMode::Hiragana
+                | InputMode::FullWidthKatakana
+                | InputMode::HalfWidthKatakana
+        );
+
         let raw = match self.input_mode {
-            // 英数モードはローマ字変換せず、そのまま入れる
+            // 英数モードはローマ字変換せず、そのまま入力
             InputMode::FullWidthAlphanumeric | InputMode::HalfWidthAlphanumeric => {
                 input.to_string()
             }
-            // かな系モードはローマ字変換する
+
+            // かな系モードはローマ字変換
             _ => self.romaji_input.input(input),
         };
+
+        let has_romaji_fallback = is_kana_mode
+            && raw.chars().any(|ch| ch.is_ascii_alphabetic());
 
         let converted = self.convert_text(&raw);
 
         for ch in converted.chars() {
             self.composition.insert(ch);
+        }
+
+        // 無効なローマ字を通常文字として出力した場合だけ、Backspaceによる状態復元を可能にする
+        if has_romaji_fallback {
+            self.last_romaji_fallback_undo = Some(RomajiFallbackUndo {
+                composition: composition_before,
+                romaji_input: romaji_before,
+            });
         }
 
         converted
@@ -342,6 +382,8 @@ impl ImeState {
     /// 戻り値
     /// * `String`: 入力されたスペース文字列
     pub fn input_space(&mut self, is_shift: bool) -> String {
+        self.last_romaji_fallback_undo = None;
+
         if !is_shift && self.dictionary_reading.is_some() {
             return self.next_dictionary_candidate();
         }
@@ -454,7 +496,15 @@ impl ImeState {
 
     /// Backspaceを実行する。
     pub fn backspace(&mut self) {
+        // 直前の入力で無効なローマ字が確定されていた場合は、入力前のCompositionとローマ字入力状態を復元
+        if let Some(undo) = self.last_romaji_fallback_undo.take() {
+            self.composition = undo.composition;
+            self.romaji_input = undo.romaji_input;
+            return;
+        }
+
         self.cancel_dictionary_conversion();
+
         if self.romaji_input.has_pending_input() {
             self.romaji_input.backspace();
             return;
@@ -463,8 +513,9 @@ impl ImeState {
         self.composition.backspace();
     }
 
-    // Deleteを実行する。
+    /// Deleteを実行する。
     pub fn delete(&mut self) {
+        self.last_romaji_fallback_undo = None;
         self.cancel_dictionary_conversion();
         if self.romaji_input.has_pending_input() {
             return;
@@ -475,6 +526,7 @@ impl ImeState {
 
     // カーソルを左へ移動する。
     pub fn move_cursor_left(&mut self) {
+        self.last_romaji_fallback_undo = None;
         self.cancel_dictionary_conversion();
         if self.romaji_input.has_pending_input() {
             return;
@@ -485,6 +537,7 @@ impl ImeState {
 
     // カーソルを右へ移動する。
     pub fn move_cursor_right(&mut self) {
+        self.last_romaji_fallback_undo = None;
         self.cancel_dictionary_conversion();
         if self.romaji_input.has_pending_input() {
             return;
@@ -495,6 +548,7 @@ impl ImeState {
 
     // カーソルを先頭へ移動する。
     pub fn move_cursor_to_head(&mut self) {
+        self.last_romaji_fallback_undo = None;
         self.cancel_dictionary_conversion();
         if self.romaji_input.has_pending_input() {
             return;
@@ -505,6 +559,7 @@ impl ImeState {
 
     // カーソルを末尾へ移動する。
     pub fn move_cursor_to_tail(&mut self) {
+        self.last_romaji_fallback_undo = None;
         self.cancel_dictionary_conversion();
         if self.romaji_input.has_pending_input() {
             return;
@@ -515,6 +570,7 @@ impl ImeState {
 
     // 入力状態をすべてクリアする。
     pub fn clear(&mut self) {
+        self.last_romaji_fallback_undo = None;
         self.dictionary_reading = None;
         self.dictionary_candidates.clear();
         self.dictionary_candidate_index = 0;
@@ -1975,5 +2031,36 @@ mod tests {
         state.backspace();
 
         assert_eq!(state.get_display_text(), "にほん");
+    }
+
+    #[test]
+    fn test_backspace_restores_invalid_romaji_for_correction() {
+        let mut state = ImeState::new();
+
+        // 「しん」を入力する。
+        for ch in "shinb".chars() {
+            state.input_char(ch);
+        }
+
+        // 誤った「n」を入力する。
+        state.input_char('n');
+        assert_eq!(state.get_display_text(), "しんｂｎ");
+
+        // uによって「b」が通常文字として出力され、
+        // 「nu」が「ぬ」に変換される。
+        state.input_char('u');
+        assert_eq!(state.get_display_text(), "しんｂぬ");
+
+        // 1回目のBackspaceで、uを入力する前の状態に戻る。
+        state.backspace();
+        assert_eq!(state.get_display_text(), "しんｂｎ");
+
+        // 2回目のBackspaceで誤字のnを削除する。
+        state.backspace();
+        assert_eq!(state.get_display_text(), "しんｂ");
+
+        // bにuを続けて、正しく「ぶ」に変換される。
+        state.input_char('u');
+        assert_eq!(state.get_display_text(), "しんぶ");
     }
 }
