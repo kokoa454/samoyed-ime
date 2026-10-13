@@ -259,12 +259,13 @@ impl SamoyedIMEEditSession {
     where
         F: FnOnce(&mut ImeState),
     {
-        let (current_state, current_composition) = {
+        let (current_state, current_composition, client_id) = {
             let state = self.state.lock().unwrap();
 
             (
                 state.ime_state.clone(),
                 state.composition.clone(),
+                state.client_id,
             )
         };
 
@@ -320,6 +321,7 @@ impl SamoyedIMEEditSession {
                 if let Err(error) = candidate_window::show(
                     &self.context,
                     ec,
+                    client_id,
                     &composition_for_window,
                     next_state.get_dictionary_candidates(),
                     next_state.get_dictionary_candidate_index().unwrap_or(0),
@@ -397,6 +399,7 @@ impl SamoyedIMEEditSession {
         } else if let Err(error) = candidate_window::show(
             &self.context,
             ec,
+            client_id,
             &composition,
             next_state.get_dictionary_candidates(),
             next_state.get_dictionary_candidate_index().unwrap_or(0),

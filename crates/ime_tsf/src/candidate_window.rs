@@ -1,6 +1,8 @@
 use std::sync::{Mutex, OnceLock};
+use std::cell::RefCell;
+use std::rc::Rc;
 
-use windows::core::{w, BOOL, Result as WinResult};
+use windows::core::{implement, w, BOOL, Interface, Ref, Result as WinResult};
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, CreateFontW, CreatePen, CreateSolidBrush, DeleteObject, DrawTextW, EndPaint, FillRect,
@@ -8,13 +10,17 @@ use windows::Win32::Graphics::Gdi::{
     CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_CHARSET, DRAW_TEXT_FORMAT, HGDIOBJ,
     OUT_DEFAULT_PRECIS, PS_SOLID, TRANSPARENT,
 };
-use windows::Win32::UI::TextServices::{ITfComposition, ITfContext};
+use windows::Win32::UI::TextServices::{
+    ITfComposition, ITfContext, ITfEditSession, ITfEditSession_Impl, ITfSource, ITfTextLayoutSink,
+    ITfTextLayoutSink_Impl, TF_E_NOLAYOUT, TF_ES_ASYNC, TF_ES_READ, TF_LC_CHANGE, TfLayoutCode,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, IsWindow, PostMessageW,
     SetWindowLongPtrW, SetWindowPos, ShowWindow, GWLP_WNDPROC, HWND_MESSAGE, HWND_TOPMOST,
     SW_HIDE, SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_SHOWWINDOW, WM_APP, WM_ERASEBKGND,
     WM_NCDESTROY, WM_PAINT, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
+
 
 use crate::logging::log;
 
@@ -51,6 +57,408 @@ fn state() -> &'static Mutex<WindowState> {
             selection: 0,
         })
     })
+}
+
+/// レイアウト更新後に表示する候補の情報
+struct PendingLayoutRequest {
+    context: ITfContext,    // TSFコンテキスト
+    composition: ITfComposition, // 表示対象のComposition
+    client_id: u32, // TSFクライアントID
+    candidates: Vec<String>, // 候補文字列のリスト
+    selection: usize, // 選択中の候補インデックス
+    request_in_flight: bool, // レイアウト変更要求が発行済みか
+    active: bool, // レイアウト変更通知が登録済みか
+}
+
+/// レイアウト変更通知の登録情報
+struct LayoutSubscription {
+    source: ITfSource, // ITfSourceオブジェクト
+    cookie: u32, // UnadviseSinkで使うCookie
+    _sink: ITfTextLayoutSink, // ITfTextLayoutSinkオブジェクト
+    pending: Rc<RefCell<PendingLayoutRequest>>, // 保留中のレイアウト変更要求
+}
+
+// COMインターフェースはアドバイス登録したスレッドで管理する
+thread_local! {
+    static LAYOUT_SUBSCRIPTION: RefCell<Option<LayoutSubscription>> =
+        RefCell::new(None);
+}
+
+/// 候補ウィンドウの表示位置を取得するための通知登録を解除する。
+///
+/// 引数:
+/// * `expected`: 解除したいレイアウト変更要求（指定した場合、同じものだけ解除する）
+fn remove_layout_subscription(
+    expected: Option<&Rc<RefCell<PendingLayoutRequest>>>,
+) {
+    let subscription = LAYOUT_SUBSCRIPTION.with(|slot| {
+        let mut slot = slot.borrow_mut();
+
+        let should_remove = match (slot.as_ref(), expected) {
+            (Some(current), Some(expected)) => {
+                Rc::ptr_eq(&current.pending, expected)
+            }
+            (Some(_), None) => true,
+            (None, _) => false,
+        };
+
+        if should_remove {
+            slot.take()
+        } else {
+            None
+        }
+    });
+
+    if let Some(subscription) = subscription {
+        subscription.pending.borrow_mut().active = false;
+
+        if let Err(error) = unsafe {
+            subscription.source.UnadviseSink(subscription.cookie)
+        } {
+            log(&format!(
+                "[SamoyedIME] UnadviseSink failed: {:?}",
+                error
+            ));
+        } else {
+            log("[SamoyedIME] Text layout sink unadvised");
+        }
+    }
+}
+
+/// テキストレイアウト変更を監視するSink。
+#[implement(ITfTextLayoutSink)]
+struct LayoutRetrySink {
+    pending: Rc<RefCell<PendingLayoutRequest>>,
+}
+
+impl LayoutRetrySink {
+    /// コンストラクタ。
+    fn new(pending: Rc<RefCell<PendingLayoutRequest>>) -> Self {
+        Self { pending }
+    }
+}
+
+impl ITfTextLayoutSink_Impl for LayoutRetrySink_Impl {
+    /// テキストレイアウト変更を受け取る。
+    ///
+    /// 引数:
+    /// * `pic`: レイアウトが変化したContext
+    /// * `lcode`: レイアウト変更コード
+    /// * `_pview`: 対象のContextView
+    ///
+    /// 戻り値:
+    /// * `WinResult<()>`: 処理結果
+    fn OnLayoutChange(
+        &self,
+        pic: Ref<'_, ITfContext>,
+        lcode: TfLayoutCode,
+        _pview: Ref<'_, windows::Win32::UI::TextServices::ITfContextView>,
+    ) -> WinResult<()> {
+        if lcode != TF_LC_CHANGE {
+            return Ok(());
+        }
+
+        let callback_context = pic.ok()?;
+
+        let (context, client_id) = {
+            let mut request = self.pending.borrow_mut();
+
+            if !request.active
+                || request.context.as_raw() != callback_context.as_raw()
+                || request.request_in_flight
+            {
+                return Ok(());
+            }
+
+            request.request_in_flight = true;
+
+            (request.context.clone(), request.client_id)
+        };
+
+        log("[SamoyedIME] Layout changed; requesting read edit session");
+
+        let edit_session: ITfEditSession =
+            LayoutRetryEditSession::new(self.pending.clone()).into();
+
+        match unsafe {
+            context.RequestEditSession(
+                client_id,
+                &edit_session,
+                TF_ES_ASYNC | TF_ES_READ,
+            )
+        } {
+            Ok(hr) if hr.0 >= 0 => {
+                log(&format!(
+                    "[SamoyedIME] Layout retry edit session requested: {:?}",
+                    hr
+                ));
+            }
+            Ok(hr) => {
+                self.pending.borrow_mut().request_in_flight = false;
+
+                log(&format!(
+                    "[SamoyedIME] Layout retry request failed: {:?}",
+                    hr
+                ));
+            }
+            Err(error) => {
+                self.pending.borrow_mut().request_in_flight = false;
+
+                log(&format!(
+                    "[SamoyedIME] RequestEditSession for layout retry failed: {:?}",
+                    error
+                ));
+            }
+        }
+
+        Ok(())
+    }
+}
+
+/// レイアウト更新後にテキスト位置を再取得するEditSession
+#[implement(ITfEditSession)]
+struct LayoutRetryEditSession {
+    pending: Rc<RefCell<PendingLayoutRequest>>, // 保留中のレイアウト要求
+}
+
+impl LayoutRetryEditSession {
+    /// コンストラクタ。
+    fn new(pending: Rc<RefCell<PendingLayoutRequest>>) -> Self {
+        Self { pending }
+    }
+}
+
+impl ITfEditSession_Impl for LayoutRetryEditSession_Impl {
+    /// 現在のEditCookieでテキスト位置を取得し、候補ウィンドウを表示する。
+    ///
+    /// 引数:
+    /// * `ec`: 新しいEditCookie
+    ///
+    /// 戻り値:
+    /// * `WinResult<()>`: 処理結果
+    fn DoEditSession(&self, ec: u32) -> WinResult<()> {
+        let (context, composition) = {
+            let request = self.pending.borrow();
+
+            if !request.active {
+                return Ok(());
+            }
+
+            (
+                request.context.clone(),
+                request.composition.clone(),
+            )
+        };
+
+        // 古いEditCookieを使い回さず、このEditSessionのecで再取得
+        let rect = match composition_rect(&context, ec, &composition) {
+            Ok(rect)
+                if rect.right > rect.left
+                    && rect.bottom > rect.top =>
+            {
+                rect
+            }
+            Ok(_) => {
+                self.pending.borrow_mut().request_in_flight = false;
+
+                log(
+                    "[SamoyedIME] Layout retry returned an empty rectangle; waiting for next layout",
+                );
+
+                return Ok(());
+            }
+            Err(error) => {
+                self.pending.borrow_mut().request_in_flight = false;
+
+                log(&format!(
+                    "[SamoyedIME] Layout retry GetTextExt failed: {:?}",
+                    error
+                ));
+
+                return Ok(());
+            }
+        };
+
+        let (candidates, selection) = {
+            let request = self.pending.borrow();
+
+            if !request.active
+                || request.composition.as_raw() != composition.as_raw()
+            {
+                return Ok(());
+            }
+
+            (
+                request.candidates.clone(),
+                request.selection,
+            )
+        };
+
+        if let Err(error) =
+            queue_candidate_window_update(rect, &candidates, selection)
+        {
+            self.pending.borrow_mut().request_in_flight = false;
+
+            log(&format!(
+                "[SamoyedIME] Layout retry window update failed: {:?}",
+                error
+            ));
+
+            return Err(error);
+        }
+
+        log("[SamoyedIME] Candidate window displayed after layout update");
+
+        // 成功した要求だけ登録解除
+        remove_layout_subscription(Some(&self.pending));
+
+        Ok(())
+    }
+}
+
+/// 保留中の候補要求に対するレイアウト変更通知を解除する。
+fn cancel_layout_subscription() {
+    remove_layout_subscription(None);
+}
+
+/// 候補の文字位置が取得できなかった場合、レイアウト更新後の再取得を準備する。
+///
+/// 引数:
+/// * `context`: ITfContextオブジェクト
+/// * `client_id`: TSFクライアントID
+/// * `composition`: 表示対象のComposition
+/// * `candidates`: 候補文字列のリスト
+/// * `selection`: 選択中の候補インデックス
+///
+/// 戻り値:
+/// * `WinResult<()>`: 登録に成功した場合
+fn defer_until_layout(
+    context: &ITfContext,
+    client_id: u32,
+    composition: &ITfComposition,
+    candidates: &[String],
+    selection: usize,
+) -> WinResult<()> {
+    // 同じContextに対する登録が既にある場合、最新の候補情報へ更新
+    let existing_pending = LAYOUT_SUBSCRIPTION.with(|slot| {
+        let slot = slot.borrow();
+
+        slot.as_ref().and_then(|subscription| {
+            let pending = &subscription.pending;
+
+            if pending.borrow().context.as_raw() == context.as_raw() {
+                Some(pending.clone())
+            } else {
+                None
+            }
+        })
+    });
+
+    if let Some(pending) = existing_pending {
+        let mut request = pending.borrow_mut();
+
+        request.composition = composition.clone();
+        request.client_id = client_id;
+        request.candidates = candidates.to_vec();
+        request.selection =
+            selection.min(candidates.len().saturating_sub(1));
+        request.active = true;
+
+        log("[SamoyedIME] Pending layout request updated");
+        return Ok(());
+    }
+
+    // 別のContextの登録が残っている場合は先に解除
+    cancel_layout_subscription();
+
+    let pending = Rc::new(RefCell::new(PendingLayoutRequest {
+        context: context.clone(),
+        composition: composition.clone(),
+        client_id,
+        candidates: candidates.to_vec(),
+        selection: selection.min(candidates.len().saturating_sub(1)),
+        request_in_flight: false,
+        active: true,
+    }));
+
+    let source: ITfSource = context.cast()?;
+
+    let sink: ITfTextLayoutSink =
+        LayoutRetrySink::new(pending.clone()).into();
+
+    let cookie = unsafe {
+        source.AdviseSink(&ITfTextLayoutSink::IID, &sink)?
+    };
+
+    LAYOUT_SUBSCRIPTION.with(|slot| {
+        *slot.borrow_mut() = Some(LayoutSubscription {
+            source,
+            cookie,
+            _sink: sink,
+            pending,
+        });
+    });
+
+    log("[SamoyedIME] Text layout sink advised");
+    Ok(())
+}
+
+/// 候補ウィンドウの位置と候補情報を更新し、表示を要求する。
+///
+/// 引数:
+/// * `rect`: Compositionの画面上の矩形
+/// * `candidates`: 候補文字列のリスト
+/// * `selection`: 選択中の候補インデックス
+///
+/// 戻り値:
+/// * `WinResult<()>`: 表示要求の送信に成功した場合
+fn queue_candidate_window_update(
+    rect: RECT,
+    candidates: &[String],
+    selection: usize,
+) -> WinResult<()> {
+    let task_window = {
+        let mut state = state().lock().unwrap();
+
+        let Some(task_window) = state.task_window else {
+            log("[SamoyedIME] Candidate window task window is unavailable");
+            return Ok(());
+        };
+
+        state.rect = rect;
+        state.candidates = candidates.to_vec();
+        state.selection =
+            selection.min(candidates.len().saturating_sub(1));
+
+        task_window
+    };
+
+    unsafe {
+        PostMessageW(
+            Some(HWND(task_window as *mut _)),
+            WM_UPDATE_CANDIDATE_WINDOW,
+            WPARAM(0),
+            LPARAM(0),
+        )?;
+    }
+
+    Ok(())
+}
+
+/// 候補ウィンドウを隠すメッセージを送る。
+fn post_hide_candidate_window() {
+    let task_window = state().lock().unwrap().task_window;
+
+    if let Some(task_window) = task_window {
+        unsafe {
+            let _ = PostMessageW(
+                Some(HWND(task_window as *mut _)),
+                WM_HIDE_CANDIDATE_WINDOW,
+                WPARAM(0),
+                LPARAM(0),
+            );
+        }
+    }
 }
 
 /// 候補ウィンドウを初期化する。
@@ -131,73 +539,124 @@ pub fn initialize() -> WinResult<()> {
 ///
 /// 引数:
 /// * `context`: ITfContextオブジェクト
-/// * `edit_cookie`: 編集クッキー
-/// * `composition`: ITfCompositionオブジェクト
+/// * `edit_cookie`: 現在の編集クッキー
+/// * `client_id`: TSFクライアントID
+/// * `composition`: 表示対象のComposition
 /// * `candidates`: 候補文字列のリスト
 /// * `selection`: 選択中の候補インデックス
 ///
 /// 戻り値:
-/// * `WinResult<()>`: 成功時はOk、失敗時はErr
+/// * `WinResult<()>`: 表示要求に成功した場合
 pub fn show(
     context: &ITfContext,
     edit_cookie: u32,
+    client_id: Option<u32>,
     composition: &ITfComposition,
     candidates: &[String],
     selection: usize,
 ) -> WinResult<()> {
     log("[SamoyedIME] CandidateWindow::show begin");
 
-    log("[SamoyedIME] Before composition_rect");
-    let rect = composition_rect(context, edit_cookie, composition)?;
+    match composition_rect(context, edit_cookie, composition) {
+        Ok(rect)
+            if rect.right > rect.left
+                && rect.bottom > rect.top =>
+        {
+            log(&format!(
+                "[SamoyedIME] composition_rect succeeded: left={}, top={}, right={}, bottom={}",
+                rect.left, rect.top, rect.right, rect.bottom
+            ));
 
-    log(&format!(
-        "[SamoyedIME] composition_rect succeeded: left={}, top={}, right={}, bottom={}",
-        rect.left, rect.top, rect.right, rect.bottom
-    ));
+            // 直接取得できた場合、古い再試行要求を解除
+            cancel_layout_subscription();
 
-    let mut state = state().lock().unwrap();
-    let Some(task_window) = state.task_window else {
+            queue_candidate_window_update(
+                rect,
+                candidates,
+                selection,
+            )
+        }
+        Ok(_) => {
+            log(
+                "[SamoyedIME] composition_rect returned an empty rectangle",
+            );
+
+            defer_candidate_window_until_layout(
+                context,
+                client_id,
+                composition,
+                candidates,
+                selection,
+            )
+        }
+        Err(error) if error.code() == TF_E_NOLAYOUT => {
+            log(
+                "[SamoyedIME] TF_E_NOLAYOUT; waiting for layout change",
+            );
+
+            defer_candidate_window_until_layout(
+                context,
+                client_id,
+                composition,
+                candidates,
+                selection,
+            )
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// レイアウト更新後に候補を表示するよう登録する。
+///
+/// 引数:
+/// * `context`: ITfContextオブジェクト
+/// * `client_id`: TSFクライアントID
+/// * `composition`: 表示対象のComposition
+/// * `candidates`: 候補文字列のリスト
+/// * `selection`: 選択中の候補インデックス
+///
+/// 戻り値:
+/// * `WinResult<()>`: 登録に成功した場合
+fn defer_candidate_window_until_layout(
+    context: &ITfContext,
+    client_id: Option<u32>,
+    composition: &ITfComposition,
+    candidates: &[String],
+    selection: usize,
+) -> WinResult<()> {
+    let Some(client_id) = client_id else {
+        log("[SamoyedIME] Cannot retry layout: client ID is unavailable");
         return Ok(());
     };
 
-    state.rect = rect;
-    state.candidates = candidates.to_vec();
-    state.selection = selection.min(candidates.len().saturating_sub(1));
-    drop(state);
-
-    unsafe {
-        PostMessageW(
-            Some(HWND(task_window as *mut _)),
-            WM_UPDATE_CANDIDATE_WINDOW,
-            WPARAM(0),
-            LPARAM(0),
-        )?;
-    }
-
-    Ok(())
+    defer_until_layout(
+        context,
+        client_id,
+        composition,
+        candidates,
+        selection,
+    )
 }
 
 /// 候補ウィンドウを非表示にする。
 pub fn hide() {
-    let state = state().lock().unwrap();
-    if let Some(task_window) = state.task_window {
-        unsafe {
-            let _ = PostMessageW(
-                Some(HWND(task_window as *mut _)),
-                WM_HIDE_CANDIDATE_WINDOW,
-                WPARAM(0),
-                LPARAM(0),
-            );
-        }
-    }
+    cancel_layout_subscription();
+    post_hide_candidate_window();
 }
 
 /// 候補ウィンドウを終了する。
 pub fn shutdown() {
+    // Deactivate時にContextとSinkの参照を残さない
+    cancel_layout_subscription();
+
     let state = state().lock().unwrap();
+
     if let Some(candidate_window) = state.candidate_window {
         unsafe {
-            let _ = ShowWindow(HWND(candidate_window as *mut _), SW_HIDE);
+            let _ = ShowWindow(
+                HWND(candidate_window as *mut _),
+                SW_HIDE,
+            );
         }
     }
 }
