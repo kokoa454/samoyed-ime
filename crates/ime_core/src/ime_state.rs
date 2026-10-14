@@ -491,6 +491,9 @@ impl ImeState {
             return self.next_dictionary_candidate();
         }
 
+        // 一時変換中かどうかを、解除する前に保存
+        let can_start_dictionary_conversion = self.conversion_mode.is_none();
+
         self.cancel_dictionary_conversion();
         self.conversion_mode = None;
 
@@ -508,7 +511,7 @@ impl ImeState {
             self.romaji_input.clear();
         }
 
-        if !is_shift && self.input_mode == InputMode::Hiragana && self.has_composition() {
+        if !is_shift && self.input_mode == InputMode::Hiragana && can_start_dictionary_conversion && self.has_composition() {
             let reading: String = self.composition.get_content_units().iter().collect();
             let mut seen_surfaces = HashSet::new();
             let candidates: Vec<String> = Dictionary::embedded()
@@ -520,13 +523,20 @@ impl ImeState {
                 })
                 .collect();
 
-            if !candidates.is_empty() {
-                self.dictionary_reading = Some(reading);
-                self.dictionary_candidates = candidates;
-                self.dictionary_candidate_index = 0;
-                self.replace_composition(&self.dictionary_candidates[0].clone());
-                return self.get_display_text();
+            // 候補がない場合は、読みを維持して空白を挿入しない
+            if candidates.is_empty() {
+                return String::new();
             }
+
+            // 候補がある場合は辞書変換を開始
+            self.dictionary_reading = Some(reading);
+            self.dictionary_candidates = candidates;
+            self.dictionary_candidate_index = 0;
+
+            let candidate = self.dictionary_candidates[0].clone();
+            self.replace_composition(&candidate);
+
+            return self.get_display_text();
         }
 
         // 通常スペースの種別（全角か半角か）
@@ -2098,65 +2108,56 @@ mod tests {
     // スペースキー入力
     // ============================================================
 
+    fn assert_space_for_mode(
+        mode: InputMode,
+        is_shift: bool,
+        expected: &str,
+    ) {
+        let mut state = ImeState::new();
+
+        // 入力状態を初期化し、テスト対象の入力モードを設定する。
+        state.clear();
+        state.set_input_mode(mode);
+
+        // Spaceを入力する。
+        let actual = state.input_space(is_shift);
+
+        // 入力されたスペースを確認する。
+        assert_eq!(
+            actual,
+            expected,
+            "input_space() の戻り値が不正: mode={mode:?}, shift={is_shift}"
+        );
+
+        // Compositionの表示内容も確認する。
+        assert_eq!(
+            state.get_display_text(),
+            expected,
+            "表示文字列が不正: mode={mode:?}, shift={is_shift}"
+        );
+    }
+
     #[test]
     fn test_space_input_per_mode() {
         // ひらがなモード
-        // Space -> 全角スペース「　」
-        let mut state = ImeState::new();
-        state.input_space(false);
-        assert_eq!(state.get_display_text(), "　");
-        // Shift+Space -> 半角スペース「 」
-        let mut state = ImeState::new();
-        state.input_space(true);
-        assert_eq!(state.get_display_text(), " ");
+        assert_space_for_mode(InputMode::Hiragana, false, "　");
+        assert_space_for_mode(InputMode::Hiragana, true, " ");
 
         // 全角カタカナモード
-        // Space -> 全角スペース「　」
-        let mut state = ImeState::new();
-        state.set_input_mode(InputMode::FullWidthKatakana);
-        state.input_space(false);
-        assert_eq!(state.get_display_text(), "　");
-        // Shift+Space -> 半角スペース「 」
-        let mut state = ImeState::new();
-        state.set_input_mode(InputMode::FullWidthKatakana);
-        state.input_space(true);
-        assert_eq!(state.get_display_text(), " ");
+        assert_space_for_mode(InputMode::FullWidthKatakana, false, "　");
+        assert_space_for_mode(InputMode::FullWidthKatakana, true, " ");
 
         // 全角英数モード
-        // Space -> 全角スペース「　」
-        let mut state = ImeState::new();
-        state.set_input_mode(InputMode::FullWidthAlphanumeric);
-        state.input_space(false);
-        assert_eq!(state.get_display_text(), "　");
-        // Shift+Space -> 半角スペース「 」
-        let mut state = ImeState::new();
-        state.set_input_mode(InputMode::FullWidthAlphanumeric);
-        state.input_space(true);
-        assert_eq!(state.get_display_text(), " ");
+        assert_space_for_mode(InputMode::FullWidthAlphanumeric, false, "　");
+        assert_space_for_mode(InputMode::FullWidthAlphanumeric, true, " ");
 
         // 半角カタカナモード
-        // Space -> 半角スペース「 」
-        let mut state = ImeState::new();
-        state.set_input_mode(InputMode::HalfWidthKatakana);
-        state.input_space(false);
-        assert_eq!(state.get_display_text(), " ");
-        // Shift+Space -> 全角スペース「　」
-        let mut state = ImeState::new();
-        state.set_input_mode(InputMode::HalfWidthKatakana);
-        state.input_space(true);
-        assert_eq!(state.get_display_text(), "　");
+        assert_space_for_mode(InputMode::HalfWidthKatakana, false, " ");
+        assert_space_for_mode(InputMode::HalfWidthKatakana, true, "　");
 
         // 半角英数モード
-        // Space -> 半角スペース「 」
-        let mut state = ImeState::new();
-        state.set_input_mode(InputMode::HalfWidthAlphanumeric);
-        state.input_space(false);
-        assert_eq!(state.get_display_text(), " ");
-        // Shift+Space -> 全角スペース「　」
-        let mut state = ImeState::new();
-        state.set_input_mode(InputMode::HalfWidthAlphanumeric);
-        state.input_space(true);
-        assert_eq!(state.get_display_text(), "　");
+        assert_space_for_mode(InputMode::HalfWidthAlphanumeric, false, " ");
+        assert_space_for_mode(InputMode::HalfWidthAlphanumeric, true, "　");
     }
 
     #[test]
@@ -2294,5 +2295,31 @@ mod tests {
         assert_eq!(state.get_display_text(), "にほんご");
         assert_eq!(state.get_dictionary_candidate_index(), None);
         assert!(state.get_dictionary_candidates().is_empty());
+    }
+
+    #[test]
+    fn test_space_without_dictionary_candidate_preserves_reading() {
+        let mut state = ImeState::new();
+
+        // 辞書にない長い読みを作る。
+        // 「か」が16回続く読みを使用する。
+        for _ in 0..16 {
+            state.input_char('k');
+            state.input_char('a');
+        }
+
+        let reading: String = state.composition.get_content_units().iter().collect();
+
+        // テスト対象の読みが辞書に存在しないことを確認する。
+        assert!(Dictionary::embedded().lookup(&reading).is_empty());
+
+        let before = state.get_display_text();
+
+        // Spaceで変換を試みる。
+        state.input_space(false);
+
+        // 候補がない場合、読みも表示文字列も維持する。
+        assert_eq!(state.get_display_text(), before);
+        assert_eq!(state.get_dictionary_candidate_index(), None);
     }
 }
