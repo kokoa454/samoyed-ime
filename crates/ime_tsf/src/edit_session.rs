@@ -32,6 +32,8 @@ pub enum EditAction {
     ApplyModeCommand(ModeCommand), // モードコマンドを適用
     ConvertComposition(InputMode), // ファンクションキーによるComposition変換
     InputSpace(bool), // スペースを入力 (is_shift)
+    MoveCandidatePrevious, // 前の変換候補へ移動
+    MoveCandidateNext,     // 次の変換候補へ移動
 }
 
 /// Composition終了通知Sink
@@ -233,6 +235,26 @@ impl ITfEditSession_Impl for SamoyedIMEEditSession_Impl {
                         ec,
                         |ime_state| {
                             ime_state.input_space(*is_shift);
+                        },
+                    )
+                }
+
+                // 前の変換候補へ移動
+                EditAction::MoveCandidatePrevious => {
+                    self.update_state_and_text(
+                        ec,
+                        |ime_state| {
+                            ime_state.select_previous_dictionary_candidate();
+                        },
+                    )
+                }
+
+                // 次の変換候補へ移動
+                EditAction::MoveCandidateNext => {
+                    self.update_state_and_text(
+                        ec,
+                        |ime_state| {
+                            ime_state.select_next_dictionary_candidate();
                         },
                     )
                 }

@@ -9,7 +9,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     VK_KANA, VK_KANJI, VK_LEFT, VK_LWIN, VK_MENU, VK_NONCONVERT,
     VK_OEM_AUTO, VK_OEM_ENLW, VK_RETURN, VK_RIGHT, VK_RWIN, VK_SHIFT,
     VK_DBE_ALPHANUMERIC, VK_DBE_HIRAGANA, VK_DBE_KATAKANA,
-    VK_F6, VK_F7, VK_F8, VK_F9, VK_F10, VK_SPACE,
+    VK_F6, VK_F7, VK_F8, VK_F9, VK_F10, VK_SPACE, VK_DOWN, VK_UP,
 };
 use windows::Win32::UI::TextServices::{ITfContext, ITfKeyEventSink, ITfKeyEventSink_Impl};
 
@@ -76,6 +76,16 @@ impl KeyEventSink {
         }
 
         let ime_state = &state.ime_state;
+
+        // 辞書候補の選択中は、上下矢印を候補移動に割り当てる。
+        if !has_non_shift_blocking_modifier() {
+            if let Some(action) = route_candidate_navigation_key(
+                vk,
+                ime_state.get_dictionary_candidate_index().is_some(),
+            ) {
+                return Some(action);
+            }
+        }
 
         // モード遷移キーをチェック
         if let Some(action) = route_edit_key(vk, state.is_open, ime_state.has_active_input()) {
@@ -599,6 +609,30 @@ pub(crate) fn route_edit_key(
         x if x == VK_F8.0 => Some(EditAction::ConvertComposition(ime_core::InputMode::HalfWidthKatakana)),
         x if x == VK_F9.0 => Some(EditAction::ConvertComposition(ime_core::InputMode::FullWidthAlphanumeric)),
         x if x == VK_F10.0 => Some(EditAction::ConvertComposition(ime_core::InputMode::HalfWidthAlphanumeric)),
+        _ => None,
+    }
+}
+
+/// 辞書候補の選択中に、候補移動キーをEditActionへ変換する。
+///
+/// 引数:
+/// * `vk`: Virtual Key code
+/// * `has_dictionary_candidates`: 辞書候補を選択中かどうか
+///
+/// 戻り値:
+/// * `Some(EditAction)`: 候補移動キーの場合
+/// * `None`: 候補移動キーではない場合
+pub(crate) fn route_candidate_navigation_key(
+    vk: u16,
+    has_dictionary_candidates: bool,
+) -> Option<EditAction> {
+    if !has_dictionary_candidates {
+        return None;
+    }
+
+    match vk {
+        x if x == VK_UP.0 => Some(EditAction::MoveCandidatePrevious),
+        x if x == VK_DOWN.0 => Some(EditAction::MoveCandidateNext),
         _ => None,
     }
 }
@@ -1304,5 +1338,25 @@ mod tests {
         state.input_space(true);
         state.input_char('a');
         assert_eq!(state.get_display_text(), "　a");
+    }
+
+    #[test]
+    fn test_candidate_navigation_key_routing() {
+        assert_eq!(
+            route_candidate_navigation_key(VK_UP.0, true),
+            Some(EditAction::MoveCandidatePrevious)
+        );
+
+        assert_eq!(
+            route_candidate_navigation_key(VK_DOWN.0, true),
+            Some(EditAction::MoveCandidateNext)
+        );
+
+        // 候補選択中でなければ、上下矢印は候補移動として処理しない。
+        assert_eq!(route_candidate_navigation_key(VK_UP.0, false), None);
+        assert_eq!(route_candidate_navigation_key(VK_DOWN.0, false), None);
+
+        // その他のキーは候補移動に割り当てない。
+        assert_eq!(route_candidate_navigation_key(VK_SPACE.0, true), None);
     }
 }

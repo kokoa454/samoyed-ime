@@ -494,6 +494,46 @@ impl ImeState {
             .map(|_| self.dictionary_candidate_index)
     }
 
+    /// 辞書変換中の候補を次へ進める。
+    ///
+    /// 戻り値:
+    /// * `String`: 選択された候補。候補選択中でない場合は空文字列
+    pub fn select_next_dictionary_candidate(&mut self) -> String {
+        if self.dictionary_reading.is_none() {
+            return String::new();
+        }
+
+        self.next_dictionary_candidate()
+    }
+
+    /// 辞書変換中の候補を前へ戻す。
+    ///
+    /// 候補の先頭で前へ移動した場合は、末尾の候補へ移動する。
+    ///
+    /// 戻り値:
+    /// * `String`: 選択された候補。候補選択中でない場合は空文字列
+    pub fn select_previous_dictionary_candidate(&mut self) -> String {
+        if self.dictionary_reading.is_none() || self.dictionary_candidates.is_empty() {
+            return String::new();
+        }
+
+        let count = self.dictionary_candidates.len();
+
+        self.dictionary_candidate_index =
+            if self.dictionary_candidate_index == 0 {
+                count - 1
+            } else {
+                self.dictionary_candidate_index - 1
+            };
+
+        let candidate =
+            self.dictionary_candidates[self.dictionary_candidate_index].clone();
+
+        self.replace_composition(&candidate);
+
+        candidate
+    }
+
     /// Backspaceを実行する。
     pub fn backspace(&mut self) {
         // 直前の入力で無効なローマ字が確定されていた場合は、入力前のCompositionとローマ字入力状態を復元
@@ -2062,5 +2102,47 @@ mod tests {
         // bにuを続けて、正しく「ぶ」に変換される。
         state.input_char('u');
         assert_eq!(state.get_display_text(), "しんぶ");
+    }
+
+    #[test]
+    fn test_dictionary_candidate_navigation() {
+        let mut state = ImeState::new();
+
+        for ch in "nihon".chars() {
+            state.input_char(ch);
+        }
+
+        state.input_space(false);
+
+        let candidates = state.get_dictionary_candidates().to_vec();
+        assert!(candidates.len() >= 2);
+
+        assert_eq!(state.get_dictionary_candidate_index(), Some(0));
+
+        // ↓ で次の候補に移動する。
+        let second_candidate = candidates[1].clone();
+
+        state.select_next_dictionary_candidate();
+
+        assert_eq!(state.get_dictionary_candidate_index(), Some(1));
+        assert_eq!(state.get_display_text(), second_candidate);
+
+        // ↑ で前の候補へ戻る。
+        state.select_previous_dictionary_candidate();
+
+        assert_eq!(state.get_dictionary_candidate_index(), Some(0));
+        assert_eq!(state.get_display_text(), candidates[0]);
+
+        // 先頭からさらに ↑ を押すと末尾へ移動する。
+        let last_index = candidates.len() - 1;
+        let last_candidate = candidates[last_index].clone();
+
+        state.select_previous_dictionary_candidate();
+
+        assert_eq!(
+            state.get_dictionary_candidate_index(),
+            Some(last_index)
+        );
+        assert_eq!(state.get_display_text(), last_candidate);
     }
 }
