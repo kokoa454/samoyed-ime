@@ -38,14 +38,16 @@ struct RomajiFallbackUndo {
 /// IMEの状態を管理する構造体
 #[derive(Clone, PartialEq, Eq)]
 pub struct ImeState {
-    input_mode: InputMode,              // 現在の入力モード
+    input_mode: InputMode, // 現在の入力モード
     conversion_mode: Option<InputMode>, // ファンクションキー等による一時変換モード
     dictionary_reading: Option<String>, // 辞書変換前の読み
     dictionary_candidates: Vec<String>, // 辞書変換候補
-    dictionary_candidate_index: usize,  // 現在の候補位置
-    composition: Composition,           // 現在の未確定文字列
-    romaji_input: RomajiInput,          // ローマ字入力
+    dictionary_candidate_index: usize, // 現在の候補位置
+    composition: Composition, // 現在の未確定文字列
+    romaji_input: RomajiInput, // ローマ字入力
     last_romaji_fallback_undo: Option<RomajiFallbackUndo>, // 無効なローマ字が確定された直前の状態
+    temporary_ascii_input: bool, // 一時英字入力中かどうか
+    preserve_composition_text: bool, // 入力済み文字列を再変換せず表示するか
 }
 
 impl ImeState {
@@ -60,6 +62,8 @@ impl ImeState {
             composition: Composition::new(),
             romaji_input: RomajiInput::new(),
             last_romaji_fallback_undo: None,
+            temporary_ascii_input: false,
+            preserve_composition_text: false,
         }
     }
 
@@ -77,6 +81,8 @@ impl ImeState {
     /// * `mode`: 新しい入力モード
     pub fn set_input_mode(&mut self, mode: InputMode) {
         self.last_romaji_fallback_undo = None;
+        self.temporary_ascii_input = false;
+        self.preserve_composition_text = false;
         self.input_mode = mode;
     }
 
@@ -86,6 +92,8 @@ impl ImeState {
     /// * `command`: モード切替コマンド
     pub fn apply_mode_command(&mut self, command: ModeCommand) {
         self.last_romaji_fallback_undo = None;
+        self.temporary_ascii_input = false;
+        self.preserve_composition_text = false;
 
         // 未変換ローマ字がある間はモードを変更しない
         if self.has_pending_input() {
@@ -133,6 +141,9 @@ impl ImeState {
         if !self.has_active_input() {
             return;
         }
+
+        self.temporary_ascii_input = false;
+        self.preserve_composition_text = false;
 
         self.cancel_dictionary_conversion();
 
@@ -256,6 +267,55 @@ fn convert_text_to_mode(text: &str, target_mode: InputMode) -> String {
 }
 
 impl ImeState {
+    /// 一時英字入力を開始する。
+    ///
+    /// Shift付きの英字キーから呼び出す。
+    ///
+    /// 引数:
+    /// * `first_char`: 最初に入力する英字
+    ///
+    /// 戻り値:
+    /// * `String`: 入力した英字
+    pub fn start_temporary_ascii_input(&mut self, first_char: char) -> String {
+        self.last_romaji_fallback_undo = None;
+        self.cancel_dictionary_conversion();
+        self.conversion_mode = None;
+
+        // 未変換ローマ字が残っている場合は、先にCompositionへ反映
+        if self.romaji_input.has_pending_input() {
+            let pending = self.romaji_input.get_pending_input();
+            let resolved = if pending == "n" {
+                "ん".to_string()
+            } else {
+                pending.to_string()
+            };
+
+            let converted = self.convert_text(&resolved);
+
+            for ch in converted.chars() {
+                self.composition.insert(ch);
+            }
+
+            self.romaji_input.clear();
+        }
+
+        self.temporary_ascii_input = true;
+        self.preserve_composition_text = true;
+
+        // 最初の大文字をそのまま挿入
+        self.composition.insert(first_char);
+
+        first_char.to_string()
+    }
+
+    /// 一時英字入力中かどうかを取得する。
+    ///
+    /// 戻り値:
+    /// * `bool`: 一時英字入力中ならtrue
+    pub fn is_temporary_ascii_input(&self) -> bool {
+        self.temporary_ascii_input
+    }
+
     /// 文字を入力する。
     ///
     /// 引数:
@@ -266,6 +326,18 @@ impl ImeState {
     pub fn input_char(&mut self, input: char) -> String {
         // 前回の復元情報は、今回の入力に対して一度だけ使用
         self.last_romaji_fallback_undo = None;
+
+        // 一時英字入力中は、ローマ字変換をせず文字をそのまま入力
+        if self.temporary_ascii_input && input.is_ascii_graphic() {
+            self.cancel_dictionary_conversion();
+            self.conversion_mode = None;
+            self.composition.insert(input);
+
+            return input.to_string();
+        }
+
+        // ASCII英字以外の文字が入力された場合は一時英字入力を終了
+        self.temporary_ascii_input = false;
 
         self.cancel_dictionary_conversion();
         self.conversion_mode = None;
@@ -321,6 +393,21 @@ impl ImeState {
             return self.composition.get_content_units().iter().collect();
         }
 
+        // 一時英字入力を開始したCompositionは、入力済み文字を再変換しない
+        if self.preserve_composition_text {
+            let content_units = self.composition.get_content_units();
+            let cursor_pos = self.composition.get_cursor_pos().min(content_units.len());
+
+            let before_cursor: String = content_units[..cursor_pos].iter().collect();
+            let after_cursor: String = content_units[cursor_pos..].iter().collect();
+
+            let mut text = before_cursor;
+            text.push_str(&self.convert_text(self.romaji_input.get_pending_input()));
+            text.push_str(&after_cursor);
+
+            return text;
+        }
+
         let content_units = self.composition.get_content_units();
         let cursor_pos = self.composition.get_cursor_pos().min(content_units.len());
         let pending = self.romaji_input.get_pending_input();
@@ -355,6 +442,14 @@ impl ImeState {
             return self.composition.get_cursor_pos();
         }
 
+        // 一時英字入力中は、未確定ローマ字分だけカーソル位置をずらす
+        if self.preserve_composition_text {
+            return self.composition.get_cursor_pos()
+                + self.convert_text(self.romaji_input.get_pending_input())
+                    .chars()
+                    .count();
+        }
+
         let content_units = self.composition.get_content_units();
         let source_cursor_pos = self.composition.get_cursor_pos().min(content_units.len());
 
@@ -383,6 +478,14 @@ impl ImeState {
     /// * `String`: 入力されたスペース文字列
     pub fn input_space(&mut self, is_shift: bool) -> String {
         self.last_romaji_fallback_undo = None;
+
+        // 一時英字入力中のSpaceは半角スペースを入力して、かな入力へ戻す
+        if self.temporary_ascii_input {
+            self.temporary_ascii_input = false;
+            self.composition.insert(' ');
+
+            return " ".to_string();
+        }
 
         if !is_shift && self.dictionary_reading.is_some() {
             return self.next_dictionary_candidate();
@@ -468,6 +571,10 @@ impl ImeState {
     /// 戻り値
     /// * `bool`: 入力を受け付けられる場合はtrue
     pub fn can_input_char(&self, input: char) -> bool {
+        if self.temporary_ascii_input {
+            return input.is_ascii_graphic();
+        }
+
         match self.input_mode {
             InputMode::FullWidthAlphanumeric | InputMode::HalfWidthAlphanumeric => true,
             _ => input.is_ascii_alphabetic() || self.romaji_input.can_accept_input(input),
@@ -617,6 +724,8 @@ impl ImeState {
         self.composition.clear();
         self.romaji_input.clear();
         self.conversion_mode = None;
+        self.temporary_ascii_input = false;
+        self.preserve_composition_text = false;
     }
 
     /// 辞書変換をキャンセルし、元の読みをCompositionへ戻す。

@@ -87,7 +87,7 @@ impl KeyEventSink {
             return Some(EditAction::Clear);
         }
 
-        // 辞書候補の選択中は、上下矢印を候補移動に割り当てる。
+        // 辞書候補の選択中は、上下矢印を候補移動に割り当てる
         if !has_non_shift_blocking_modifier() {
             if let Some(action) = route_candidate_navigation_key(
                 vk,
@@ -118,7 +118,12 @@ impl KeyEventSink {
         // 文字入力
         if let Some(ch) = vk_to_input_char(vk, lparam) {
             if ime_state.can_input_char(ch) {
-                return Some(EditAction::InputChar(ch));
+                return Some(route_character_input(
+                    ch,
+                    is_shift_down(),
+                    ime_state.get_input_mode(),
+                    ime_state.is_temporary_ascii_input(),
+                ));
             }
         }
 
@@ -515,12 +520,8 @@ fn vk_to_input_char(
         return None;
     }
 
-    // Shift + Aなどは通常のローマ字入力としてIMEに渡さない
-    if ch.is_ascii_alphabetic() {
-        if is_shift_down() {
-            return None;
-        }
-
+    // Shift+英字は小文字に変換してIMEに渡す
+    if ch.is_ascii_alphabetic() && !is_shift_down() {
         ch = ch.to_ascii_lowercase();
     }
 
@@ -644,6 +645,40 @@ pub(crate) fn route_candidate_navigation_key(
         x if x == VK_UP.0 => Some(EditAction::MoveCandidatePrevious),
         x if x == VK_DOWN.0 => Some(EditAction::MoveCandidateNext),
         _ => None,
+    }
+}
+
+/// 文字入力をEditActionへ変換する。
+///
+/// 引数:
+/// * `ch`: 入力文字
+/// * `is_shift`: Shiftが押されているかどうか
+/// * `input_mode`: 現在の入力モード
+/// * `is_temporary_ascii`: 一時英字入力中かどうか
+///
+/// 戻り値:
+/// * `EditAction`: 文字入力に対応するアクション
+pub(crate) fn route_character_input(
+    ch: char,
+    is_shift: bool,
+    input_mode: InputMode,
+    is_temporary_ascii: bool,
+) -> EditAction {
+    if is_temporary_ascii {
+        return EditAction::InputChar(ch);
+    }
+
+    let is_kana_mode = matches!(
+        input_mode,
+        InputMode::Hiragana
+            | InputMode::FullWidthKatakana
+            | InputMode::HalfWidthKatakana
+    );
+
+    if is_shift && ch.is_ascii_alphabetic() && is_kana_mode {
+        EditAction::StartTemporaryAscii(ch)
+    } else {
+        EditAction::InputChar(ch)
     }
 }
 
@@ -1368,5 +1403,39 @@ mod tests {
 
         // その他のキーは候補移動に割り当てない。
         assert_eq!(route_candidate_navigation_key(VK_SPACE.0, true), None);
+    }
+
+    #[test]
+    fn test_shifted_character_can_start_temporary_ascii_input() {
+        assert_eq!(
+            route_character_input(
+                'G',
+                true,
+                InputMode::Hiragana,
+                false,
+            ),
+            EditAction::StartTemporaryAscii('G')
+        );
+
+        assert_eq!(
+            route_character_input(
+                'i',
+                false,
+                InputMode::Hiragana,
+                true,
+            ),
+            EditAction::InputChar('i')
+        );
+
+        // 通常の英数モードでは一時入力モードを開始しない。
+        assert_eq!(
+            route_character_input(
+                'G',
+                true,
+                InputMode::HalfWidthAlphanumeric,
+                false,
+            ),
+            EditAction::InputChar('G')
+        );
     }
 }

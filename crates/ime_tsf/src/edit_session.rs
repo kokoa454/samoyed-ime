@@ -34,7 +34,8 @@ pub enum EditAction {
     ConvertComposition(InputMode), // ファンクションキーによるComposition変換
     InputSpace(bool), // スペースを入力 (is_shift)
     MoveCandidatePrevious, // 前の変換候補へ移動
-    MoveCandidateNext,     // 次の変換候補へ移動
+    MoveCandidateNext, // 次の変換候補へ移動
+    StartTemporaryAscii(char), // 一時英字入力を開始
 }
 
 /// Composition終了通知Sink
@@ -151,6 +152,34 @@ impl ITfEditSession_Impl for SamoyedIMEEditSession_Impl {
                         ec,
                         |ime_state| {
                             ime_state.input_char(*input);
+                        },
+                    )
+                }
+
+                // 一時英字入力を開始
+                EditAction::StartTemporaryAscii(input) => {
+                    // 辞書候補選択中なら、選択中の候補を先に確定する。
+                    let has_selected_candidate = {
+                        let state = self.state.lock().unwrap();
+
+                        state
+                            .ime_state
+                            .get_dictionary_candidate_index()
+                            .is_some()
+                    };
+
+                    if has_selected_candidate {
+                        log(
+                            "[SamoyedIME] Candidate selected; committing before temporary ASCII input",
+                        );
+
+                        self.commit(ec)?;
+                    }
+
+                    self.update_state_and_text(
+                        ec,
+                        |ime_state| {
+                            ime_state.start_temporary_ascii_input(*input);
                         },
                     )
                 }
