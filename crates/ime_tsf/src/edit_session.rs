@@ -124,6 +124,28 @@ impl ITfEditSession_Impl for SamoyedIMEEditSession_Impl {
             match &self.action {
                 // キー入力
                 EditAction::InputChar(input) => {
+                    // 辞書候補を選択中に文字が入力された場合、現在の候補を確定してから新しい入力を開始
+                    let has_selected_candidate = {
+                        let state = self.state.lock().unwrap();
+
+                        state
+                            .ime_state
+                            .get_dictionary_candidate_index()
+                            .is_some()
+                    };
+
+                    if has_selected_candidate {
+                        log(
+                            "[SamoyedIME] Candidate selected; \
+                            committing before next character input",
+                        );
+
+                        // EndCompositionによって現在の候補を確定
+                        // commit() はComposition内の文字を削除せず、候補UIを終了してIMEの状態をクリア
+                        self.commit(ec)?;
+                    }
+
+                    // 確定後、次の文字を新しいCompositionに入力
                     self.update_state_and_text(
                         ec,
                         |ime_state| {
