@@ -77,6 +77,16 @@ impl KeyEventSink {
 
         let ime_state = &state.ime_state;
 
+        // EscはIMEの状態に応じて処理を分ける
+        // 辞書候補の選択中なら元の読みへ戻し、通常の未確定入力中ならClearで入力を消す
+        if vk == VK_ESCAPE.0 && ime_state.has_active_input() {
+            if ime_state.get_dictionary_candidate_index().is_some() {
+                return Some(EditAction::CancelDictionaryConversion);
+            }
+
+            return Some(EditAction::Clear);
+        }
+
         // 辞書候補の選択中は、上下矢印を候補移動に割り当てる。
         if !has_non_shift_blocking_modifier() {
             if let Some(action) = route_candidate_navigation_key(

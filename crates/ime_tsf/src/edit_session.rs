@@ -28,6 +28,7 @@ pub enum EditAction {
     MoveCursorToTail, // カーソルを末尾に移動
     Commit, // 現在のCompositionを確定
     Clear, // 現在のCompositionを削除
+    CancelDictionaryConversion, // 辞書変換をキャンセルして元の読みへ戻す
     SetOpen(bool, Option<InputMode>), // IMEの開閉状態を変更
     ApplyModeCommand(ModeCommand), // モードコマンドを適用
     ConvertComposition(InputMode), // ファンクションキーによるComposition変換
@@ -222,6 +223,16 @@ impl ITfEditSession_Impl for SamoyedIMEEditSession_Impl {
                 // 現在のCompositionを削除
                 EditAction::Clear => {
                     self.clear(ec)
+                }
+
+                // 辞書変換をキャンセルして元の読みへ戻す
+                EditAction::CancelDictionaryConversion => {
+                    self.update_state_and_text(
+                        ec,
+                        |ime_state| {
+                            ime_state.cancel_dictionary_conversion_and_restore_reading();
+                        },
+                    )
                 }
 
                 // IMEの開閉状態を変更

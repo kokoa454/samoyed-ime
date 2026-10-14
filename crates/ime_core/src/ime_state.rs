@@ -619,6 +619,23 @@ impl ImeState {
         self.conversion_mode = None;
     }
 
+    /// 辞書変換をキャンセルし、元の読みをCompositionへ戻す。
+    ///
+    /// 候補選択中にEscが押された場合に使用する。
+    ///
+    /// 戻り値:
+    /// * なし
+    pub fn cancel_dictionary_conversion_and_restore_reading(&mut self) {
+        // 古い入力復元情報を破棄
+        self.last_romaji_fallback_undo = None;
+
+        // 選択中の候補を解除し、元の読みをCompositionへ戻す
+        self.cancel_dictionary_conversion();
+
+        // 一時的な変換モードも解除
+        self.conversion_mode = None;
+    }
+
     /// Compositionを指定した文字列に置き換える。
     /// 
     /// 引数:
@@ -2144,5 +2161,29 @@ mod tests {
             Some(last_index)
         );
         assert_eq!(state.get_display_text(), last_candidate);
+    }
+
+    #[test]
+    fn test_cancel_dictionary_conversion_restores_reading() {
+        let mut state = ImeState::new();
+
+        // 「にほんご」を入力して辞書変換する。
+        for ch in "nihongo".chars() {
+            state.input_char(ch);
+        }
+
+        state.input_space(false);
+
+        // 辞書候補を選択していることを確認する。
+        assert!(state.get_dictionary_candidate_index().is_some());
+        assert!(!state.get_dictionary_candidates().is_empty());
+
+        // Esc相当の処理で変換をキャンセルする。
+        state.cancel_dictionary_conversion_and_restore_reading();
+
+        // 元の読みへ戻り、候補選択が終了している。
+        assert_eq!(state.get_display_text(), "にほんご");
+        assert_eq!(state.get_dictionary_candidate_index(), None);
+        assert!(state.get_dictionary_candidates().is_empty());
     }
 }
