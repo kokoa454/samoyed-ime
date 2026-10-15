@@ -15,7 +15,7 @@ const KANA_SMALL_TSU: &str = "っ"; // 「っ」
 
 /// ローマ字入力の変換結果
 #[derive(Debug, PartialEq, Eq)]
-pub enum RomajiConversionResult {
+pub enum HiraganaConversionResult {
     Pending, // 未変換
     Converted { // 変換結果
         kana: String, // ひらがな
@@ -30,16 +30,16 @@ pub enum RomajiConversionResult {
 /// * `input`: ローマ字入力
 /// 
 /// 戻り値
-/// * `RomajiConversionResult`: 変換結果
-pub fn convert(input: &str) -> RomajiConversionResult {
+/// * `HiraganaConversionResult`: 変換結果
+pub fn convert(input: &str) -> HiraganaConversionResult {
     // 入力が空の場合は未変換
     if input.is_empty() {
-        return RomajiConversionResult::Pending;
+        return HiraganaConversionResult::Pending;
     }
 
     // 「ん」の判定処理
     if let Some(consumed) = convert_n(input) {
-        return RomajiConversionResult::Converted {
+        return HiraganaConversionResult::Converted {
             kana: KANA_N.to_string(),
             consumed,
         };
@@ -47,7 +47,7 @@ pub fn convert(input: &str) -> RomajiConversionResult {
 
     // 「っ」の判定処理
     if is_sokuon(input) {
-        return RomajiConversionResult::Converted {
+        return HiraganaConversionResult::Converted {
             kana: KANA_SMALL_TSU.to_string(),
             consumed: 1,
         };
@@ -60,7 +60,7 @@ pub fn convert(input: &str) -> RomajiConversionResult {
         .max_by_key(|&&(romaji, _)| romaji.len());
 
     if let Some(&(romaji, kana)) = best_match {
-        return RomajiConversionResult::Converted {
+        return HiraganaConversionResult::Converted {
             kana: kana.to_string(),
             consumed: romaji.len(),
         };
@@ -71,10 +71,10 @@ pub fn convert(input: &str) -> RomajiConversionResult {
         .iter()
         .any(|&(romaji, _)| romaji.starts_with(input))
     {
-        return RomajiConversionResult::Pending;
+        return HiraganaConversionResult::Pending;
     }
 
-    RomajiConversionResult::Invalid
+    HiraganaConversionResult::Invalid
 }
 
 /// 「ん」の変換
@@ -140,7 +140,7 @@ mod tests {
     fn assert_converted(input: &str, expected_kana: &str, expected_consumed: usize) {
         assert_eq!(
             convert(input),
-            RomajiConversionResult::Converted {
+            HiraganaConversionResult::Converted {
                 kana: expected_kana.to_string(),
                 consumed: expected_consumed,
             }
@@ -148,11 +148,11 @@ mod tests {
     }
 
     fn assert_pending(input: &str) {
-        assert_eq!(convert(input), RomajiConversionResult::Pending);
+        assert_eq!(convert(input), HiraganaConversionResult::Pending);
     }
 
     fn assert_invalid(input: &str) {
-        assert_eq!(convert(input), RomajiConversionResult::Invalid);
+        assert_eq!(convert(input), HiraganaConversionResult::Invalid);
     }
 
     // ============================================================

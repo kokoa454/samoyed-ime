@@ -1,4 +1,4 @@
-use crate::romaji_converter::{convert, RomajiConversionResult};
+use crate::hiragana_converter::{convert, HiraganaConversionResult};
 
 
 /// 未確定のローマ字入力を管理する構造体
@@ -26,7 +26,7 @@ impl RomajiInput {
         let mut output = String::new();
 
         // 前回までに「変換できない」と判定したローマ字を確定
-        while matches!(convert(&self.pending), RomajiConversionResult::Invalid) {
+        while matches!(convert(&self.pending), HiraganaConversionResult::Invalid) {
             output.push(self.pending.remove(0));
         }
 
@@ -35,13 +35,13 @@ impl RomajiInput {
         loop {
             match convert(&self.pending) {
                 // 変換できた場合
-                RomajiConversionResult::Converted { kana, consumed } => {
+                HiraganaConversionResult::Converted { kana, consumed } => {
                     output.push_str(&kana);
                     self.pending.drain(..consumed);
                 }
 
                 // 変換に必要な文字が足りない場合と、変換できない場合は保留
-                RomajiConversionResult::Pending | RomajiConversionResult::Invalid => {
+                HiraganaConversionResult::Pending | HiraganaConversionResult::Invalid => {
                     break;
                 }
             }
@@ -98,7 +98,7 @@ impl RomajiInput {
 
         !matches!(
             convert(&input.to_string()),
-            RomajiConversionResult::Invalid
+            HiraganaConversionResult::Invalid
         )
     }
 }

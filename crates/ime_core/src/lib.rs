@@ -3,7 +3,7 @@ mod ime_state;
 mod half_width_katakana_table;
 mod mode_converter;
 mod romaji_input;
-mod romaji_converter;
+mod hiragana_converter;
 mod hiragana_table;
 mod romaji_table;
 pub mod dictionary;
