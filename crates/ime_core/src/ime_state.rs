@@ -9,6 +9,9 @@ use crate::mode_converter::{
     romaji_to_hiragana,
 };
 use crate::romaji_input::RomajiInput;
+use crate::connection_costs::ConnectionCosts;
+use crate::kanji_converter::{KanjiConversionResult, KanjiConverter};
+
 
 /// 入力モード
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,6 +51,8 @@ pub struct ImeState {
     last_romaji_fallback_undo: Option<RomajiFallbackUndo>, // 無効なローマ字が確定された直前の状態
     temporary_ascii_input: bool, // 一時英字入力中かどうか
     preserve_composition_text: bool, // 入力済み文字列を再変換せず表示するか
+    dictionary_conversion: Option<KanjiConversionResult>, // Viterbiによる変換結果
+    dictionary_segment_index: usize, // 現在操作している文節のインデックス
 }
 
 impl ImeState {
@@ -64,6 +69,8 @@ impl ImeState {
             last_romaji_fallback_undo: None,
             temporary_ascii_input: false,
             preserve_composition_text: false,
+            dictionary_conversion: None,
+            dictionary_segment_index: 0,
         }
     }
 
@@ -487,8 +494,10 @@ impl ImeState {
             return " ".to_string();
         }
 
+        // 変換候補があれば次の候補へ
         if !is_shift && self.dictionary_reading.is_some() {
-            return self.next_dictionary_candidate();
+            self.next_dictionary_candidate();
+            return self.get_display_text();
         }
 
         // 一時変換中かどうかを、解除する前に保存
@@ -513,13 +522,54 @@ impl ImeState {
 
         if !is_shift && self.input_mode == InputMode::Hiragana && can_start_dictionary_conversion && self.has_composition() {
             let reading: String = self.composition.get_content_units().iter().collect();
+
+            // 実際の辞書と連接コストを使ってViterbi変換を試みる
+            let conversion = ConnectionCosts::embedded().ok().and_then(
+                |connection_costs| {
+                    let converter = KanjiConverter::new(
+                        Dictionary::embedded(),
+                        &connection_costs,
+                    );
+
+                    converter.convert(&reading).ok()
+                },
+            );
+
+            if let Some(result) =
+                conversion.filter(|result| !result.segments.is_empty())
+            {
+                // 読みとViterbiの結果を保持する
+                self.dictionary_reading = Some(reading);
+                self.dictionary_conversion = Some(result);
+                self.dictionary_segment_index = 0;
+
+                // 現在の文節に対する候補リストを更新する
+                self.update_dictionary_candidate_view();
+
+                // 各文節の選択候補を連結してCompositionへ反映する
+                let surface = self
+                    .dictionary_conversion
+                    .as_ref()
+                    .expect("conversion result was just assigned")
+                    .surface();
+
+                self.replace_composition(&surface);
+
+                return self.get_display_text();
+            }
+
+            // Viterbiで変換できない場合は、従来の完全一致検索に戻す
+            // 既存動作を維持するためのフォールバック
             let mut seen_surfaces = HashSet::new();
+
             let candidates: Vec<String> = Dictionary::embedded()
                 .lookup(&reading)
                 .iter()
                 .filter_map(|entry| {
                     let surface = entry.surface.clone();
-                    seen_surfaces.insert(surface.clone()).then_some(surface)
+                    seen_surfaces
+                        .insert(surface.clone())
+                        .then_some(surface)
                 })
                 .collect();
 
@@ -528,7 +578,6 @@ impl ImeState {
                 return String::new();
             }
 
-            // 候補がある場合は辞書変換を開始
             self.dictionary_reading = Some(reading);
             self.dictionary_candidates = candidates;
             self.dictionary_candidate_index = 0;
@@ -605,10 +654,21 @@ impl ImeState {
     }
 
     /// 現在選択されている辞書候補の位置を取得する。
+    ///
+    /// 戻り値:
+    /// * `Option<usize>`: 候補選択中の場合はその位置、それ以外はNone
     pub fn get_dictionary_candidate_index(&self) -> Option<usize> {
         self.dictionary_reading
             .as_ref()
             .map(|_| self.dictionary_candidate_index)
+    }
+
+    /// Viterbiによる文節変換中かどうかを取得する。
+    /// 
+    /// 戻り値:
+    /// * `bool`: 変換中の場合はtrue
+    pub fn has_dictionary_conversion(&self) -> bool {
+        self.dictionary_conversion.is_some()
     }
 
     /// 辞書変換中の候補を次へ進める。
@@ -616,32 +676,118 @@ impl ImeState {
     /// 戻り値:
     /// * `String`: 選択された候補。候補選択中でない場合は空文字列
     pub fn select_next_dictionary_candidate(&mut self) -> String {
+        self.advance_dictionary_candidate(true)
+    }
+
+    /// 辞書変換中の候補を前へ戻す。
+    /// 
+    /// 戻り値:
+    /// * `String`: 選択された候補。候補選択中でない場合は空文字列
+    pub fn select_previous_dictionary_candidate(&mut self) -> String {
+        self.advance_dictionary_candidate(false)
+    }
+
+    /// 次の文節へ選択対象を移動する。
+    ///
+    /// 戻り値:
+    /// * `true`: 移動成功
+    /// * `false`: 変換中ではない、または次の文節が存在しない
+    pub fn move_to_next_dictionary_segment(&mut self) -> bool {
+        let Some(conversion) = self.dictionary_conversion.as_ref() else {
+            return false;
+        };
+
+        let next_index = self.dictionary_segment_index.saturating_add(1);
+
+        if next_index >= conversion.segments.len() {
+            return false;
+        }
+
+        self.dictionary_segment_index = next_index;
+        self.update_dictionary_candidate_view();
+
+        true
+    }
+
+    /// 前の文節へ選択対象を移動する。
+    ///
+    /// 戻り値:
+    /// * `true`: 移動成功
+    /// * `false`: 変換中ではない、または前の文節が存在しない
+    pub fn move_to_previous_dictionary_segment(&mut self) -> bool {
+        if self.dictionary_conversion.is_none()
+            || self.dictionary_segment_index == 0
+        {
+            return false;
+        }
+
+        self.dictionary_segment_index -= 1;
+        self.update_dictionary_candidate_view();
+
+        true
+    }
+
+    /// 候補選択を前後に進める。
+    /// Viterbi結果がある場合は現在の文節の候補を切り替え、全文節の選択候補を連結してCompositionを更新。
+    /// 
+    /// 引数
+    /// * `forward`: trueの場合は次へ、falseの場合は前へ
+    ///
+    /// 戻り値
+    /// * `String`: 選択された候補。候補選択中でない場合は空文字列
+    fn advance_dictionary_candidate(&mut self, forward: bool) -> String {
         if self.dictionary_reading.is_none() {
             return String::new();
         }
 
-        self.next_dictionary_candidate()
-    }
+        // Viterbiによる文節単位の候補切替
+        if let Some(result) = self.dictionary_conversion.as_mut() {
+            let Some(segment) =
+                result.segments.get_mut(self.dictionary_segment_index)
+            else {
+                return String::new();
+            };
 
-    /// 辞書変換中の候補を前へ戻す。
-    ///
-    /// 候補の先頭で前へ移動した場合は、末尾の候補へ移動する。
-    ///
-    /// 戻り値:
-    /// * `String`: 選択された候補。候補選択中でない場合は空文字列
-    pub fn select_previous_dictionary_candidate(&mut self) -> String {
-        if self.dictionary_reading.is_none() || self.dictionary_candidates.is_empty() {
+            if segment.candidates.is_empty() {
+                return String::new();
+            }
+
+            let count = segment.candidates.len();
+
+            segment.selected_index = if forward {
+                (segment.selected_index + 1) % count
+            } else if segment.selected_index == 0 {
+                count - 1
+            } else {
+                segment.selected_index - 1
+            };
+
+            let selected_candidate =
+                segment.candidates[segment.selected_index].surface.clone();
+
+            // 選択された候補を反映した全文字列を取得
+            let surface = result.surface();
+
+            self.replace_composition(&surface);
+            self.update_dictionary_candidate_view();
+
+            return selected_candidate;
+        }
+
+        // フォールバック：従来の読み全体に対する候補切替
+        if self.dictionary_candidates.is_empty() {
             return String::new();
         }
 
         let count = self.dictionary_candidates.len();
 
-        self.dictionary_candidate_index =
-            if self.dictionary_candidate_index == 0 {
-                count - 1
-            } else {
-                self.dictionary_candidate_index - 1
-            };
+        self.dictionary_candidate_index = if forward {
+            (self.dictionary_candidate_index + 1) % count
+        } else if self.dictionary_candidate_index == 0 {
+            count - 1
+        } else {
+            self.dictionary_candidate_index - 1
+        };
 
         let candidate =
             self.dictionary_candidates[self.dictionary_candidate_index].clone();
@@ -651,8 +797,23 @@ impl ImeState {
         candidate
     }
 
+    /// Spaceで次の辞書候補へ進める。
+    ///
+    /// 戻り値:
+    /// * `String`: 選択された候補。候補選択中でない場合は空文字列
+    fn next_dictionary_candidate(&mut self) -> String {
+        self.advance_dictionary_candidate(true)
+    }
+
     /// Backspaceを実行する。
     pub fn backspace(&mut self) {
+        // 辞書変換中はEscと同じように変換をキャンセル
+        // 元の読みを復元した後、文字の削除は行わない
+        if self.dictionary_reading.is_some() {
+            self.cancel_dictionary_conversion_and_restore_reading();
+            return;
+        }
+
         // 直前の入力で無効なローマ字が確定されていた場合は、入力前のCompositionとローマ字入力状態を復元
         if let Some(undo) = self.last_romaji_fallback_undo.take() {
             self.composition = undo.composition;
@@ -662,11 +823,13 @@ impl ImeState {
 
         self.cancel_dictionary_conversion();
 
+        // 未確定ローマ字がある場合は、ローマ字入力状態を戻す
         if self.romaji_input.has_pending_input() {
             self.romaji_input.backspace();
             return;
         }
 
+        // 通常の入力中だけ、Compositionの文字を削除
         self.composition.backspace();
     }
 
@@ -736,6 +899,8 @@ impl ImeState {
         self.conversion_mode = None;
         self.temporary_ascii_input = false;
         self.preserve_composition_text = false;
+        self.dictionary_conversion = None;
+        self.dictionary_segment_index = 0;
     }
 
     /// 辞書変換をキャンセルし、元の読みをCompositionへ戻す。
@@ -766,29 +931,42 @@ impl ImeState {
         }
     }
 
+    /// 現在の文節の候補を既存の候補一覧へ反映する。
+    fn update_dictionary_candidate_view(&mut self) {
+        let Some((candidates, selected_index)) = self
+            .dictionary_conversion
+            .as_ref()
+            .and_then(|result| {
+                result.segments.get(self.dictionary_segment_index)
+            })
+            .map(|segment| {
+                (
+                    segment
+                        .candidates
+                        .iter()
+                        .map(|candidate| candidate.surface.clone())
+                        .collect::<Vec<_>>(),
+                    segment.selected_index,
+                )
+            })
+        else {
+            return;
+        };
+
+        self.dictionary_candidates = candidates;
+        self.dictionary_candidate_index = selected_index;
+    }
+
     /// 辞書変換を解除し、元の読みをCompositionへ戻す。
     fn cancel_dictionary_conversion(&mut self) {
         if let Some(reading) = self.dictionary_reading.take() {
             self.replace_composition(&reading);
         }
+
+        self.dictionary_conversion = None;
+        self.dictionary_segment_index = 0;
         self.dictionary_candidates.clear();
         self.dictionary_candidate_index = 0;
-    }
-
-    /// 辞書変換中の候補を次へ進める。
-    /// 
-    /// 戻り値:
-    /// * `String`: 次の候補文字列。候補がない場合は空文字列。
-    fn next_dictionary_candidate(&mut self) -> String {
-        if self.dictionary_candidates.is_empty() {
-            return String::new();
-        }
-
-        self.dictionary_candidate_index =
-            (self.dictionary_candidate_index + 1) % self.dictionary_candidates.len();
-        let candidate = self.dictionary_candidates[self.dictionary_candidate_index].clone();
-        self.replace_composition(&candidate);
-        candidate
     }
 }
 
@@ -2188,13 +2366,26 @@ mod tests {
     }
 
     #[test]
-    fn test_dictionary_conversion_restores_reading_before_edit() {
+    fn test_backspace_cancels_dictionary_conversion_without_deleting_reading() {
         let mut state = ImeState::new();
+
         for ch in "nihongo".chars() {
             state.input_char(ch);
         }
 
+        // 辞書変換を開始する。
         state.input_space(false);
+
+        assert!(state.get_dictionary_candidate_index().is_some());
+
+        // 1回目のBackspaceでは変換をキャンセルする。
+        state.backspace();
+
+        assert_eq!(state.get_display_text(), "にほんご");
+        assert_eq!(state.get_dictionary_candidate_index(), None);
+        assert!(state.get_dictionary_candidates().is_empty());
+
+        // 2回目のBackspaceでは通常の文字削除を行う。
         state.backspace();
 
         assert_eq!(state.get_display_text(), "にほん");
@@ -2246,31 +2437,34 @@ mod tests {
 
         assert_eq!(state.get_dictionary_candidate_index(), Some(0));
 
-        // ↓ で次の候補に移動する。
+        let first_surface = state.get_display_text();
         let second_candidate = candidates[1].clone();
 
-        state.select_next_dictionary_candidate();
+        // 次の候補を選択する。
+        let selected = state.select_next_dictionary_candidate();
 
+        assert_eq!(selected, second_candidate);
         assert_eq!(state.get_dictionary_candidate_index(), Some(1));
-        assert_eq!(state.get_display_text(), second_candidate);
+        assert_ne!(state.get_display_text(), first_surface);
 
-        // ↑ で前の候補へ戻る。
-        state.select_previous_dictionary_candidate();
+        // 前の候補へ戻る。
+        let selected = state.select_previous_dictionary_candidate();
 
+        assert_eq!(selected, candidates[0]);
         assert_eq!(state.get_dictionary_candidate_index(), Some(0));
-        assert_eq!(state.get_display_text(), candidates[0]);
+        assert_eq!(state.get_display_text(), first_surface);
 
-        // 先頭からさらに ↑ を押すと末尾へ移動する。
+        // 先頭からさらに前へ移動すると末尾へ進む。
         let last_index = candidates.len() - 1;
         let last_candidate = candidates[last_index].clone();
 
-        state.select_previous_dictionary_candidate();
+        let selected = state.select_previous_dictionary_candidate();
 
+        assert_eq!(selected, last_candidate);
         assert_eq!(
             state.get_dictionary_candidate_index(),
             Some(last_index)
         );
-        assert_eq!(state.get_display_text(), last_candidate);
     }
 
     #[test]
@@ -2308,6 +2502,8 @@ mod tests {
             state.input_char('a');
         }
 
+        state.input_char('!');
+
         let reading: String = state.composition.get_content_units().iter().collect();
 
         // テスト対象の読みが辞書に存在しないことを確認する。
@@ -2321,5 +2517,183 @@ mod tests {
         // 候補がない場合、読みも表示文字列も維持する。
         assert_eq!(state.get_display_text(), before);
         assert_eq!(state.get_dictionary_candidate_index(), None);
+    }
+
+    /// 文節移動テスト用の候補を作成する。
+    fn make_test_candidate(
+        surface: &str,
+        context_id: u16,
+        cost: i32,
+    ) -> crate::kanji_converter::KanjiCandidate {
+        crate::kanji_converter::KanjiCandidate {
+            surface: surface.to_string(),
+            left_id: context_id,
+            right_id: context_id,
+            word_cost: cost,
+            contextual_cost: i64::from(cost),
+        }
+    }
+
+    /// 文節移動テスト用の2文節変換結果を設定する。
+    ///
+    /// 文節1: わたし → 私 / 渡し
+    /// 文節2: は     → は / 派
+    fn install_test_dictionary_conversion(state: &mut ImeState) {
+        let first_segment = crate::kanji_converter::ConversionSegment {
+            reading: "わたし".to_string(),
+            start: 0,
+            end: 3,
+            candidates: vec![
+                make_test_candidate("私", 1, 0),
+                make_test_candidate("渡し", 1, 10),
+            ],
+            selected_index: 0,
+        };
+
+        let second_segment = crate::kanji_converter::ConversionSegment {
+            reading: "は".to_string(),
+            start: 3,
+            end: 4,
+            candidates: vec![
+                make_test_candidate("は", 2, 0),
+                make_test_candidate("派", 2, 10),
+            ],
+            selected_index: 0,
+        };
+
+        state.dictionary_reading = Some("わたしは".to_string());
+
+        state.dictionary_conversion =
+            Some(crate::kanji_converter::KanjiConversionResult {
+                reading: "わたしは".to_string(),
+                segments: vec![first_segment, second_segment],
+                total_cost: 0,
+            });
+
+        state.dictionary_segment_index = 0;
+        state.update_dictionary_candidate_view();
+
+        let surface = state
+            .dictionary_conversion
+            .as_ref()
+            .unwrap()
+            .surface();
+
+        state.replace_composition(&surface);
+    }
+
+    #[test]
+    fn test_move_to_next_dictionary_segment_updates_candidates() {
+        let mut state = ImeState::new();
+        install_test_dictionary_conversion(&mut state);
+
+        assert_eq!(state.get_display_text(), "私は");
+        assert_eq!(state.dictionary_segment_index, 0);
+
+        assert_eq!(
+            state.get_dictionary_candidates()
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            vec!["私", "渡し"]
+        );
+
+        assert!(state.move_to_next_dictionary_segment());
+
+        assert_eq!(state.dictionary_segment_index, 1);
+
+        assert_eq!(
+            state.get_dictionary_candidates()
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            vec!["は", "派"]
+        );
+
+        assert_eq!(state.get_dictionary_candidate_index(), Some(0));
+
+        // 文節の選択対象を移動しても、変換結果全体は変わらない。
+        assert_eq!(state.get_display_text(), "私は");
+    }
+
+    #[test]
+    fn test_move_to_previous_dictionary_segment_updates_candidates() {
+        let mut state = ImeState::new();
+        install_test_dictionary_conversion(&mut state);
+
+        assert!(state.move_to_next_dictionary_segment());
+        assert!(state.move_to_previous_dictionary_segment());
+
+        assert_eq!(state.dictionary_segment_index, 0);
+
+        assert_eq!(
+            state.get_dictionary_candidates()
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            vec!["私", "渡し"]
+        );
+
+        assert_eq!(state.get_dictionary_candidate_index(), Some(0));
+        assert_eq!(state.get_display_text(), "私は");
+    }
+
+    #[test]
+    fn test_dictionary_segment_navigation_stops_at_boundaries() {
+        let mut state = ImeState::new();
+        install_test_dictionary_conversion(&mut state);
+
+        // 最初の文節より前には移動しない。
+        assert!(!state.move_to_previous_dictionary_segment());
+        assert_eq!(state.dictionary_segment_index, 0);
+
+        assert!(state.move_to_next_dictionary_segment());
+
+        // 最後の文節より後ろには移動しない。
+        assert!(!state.move_to_next_dictionary_segment());
+        assert_eq!(state.dictionary_segment_index, 1);
+
+        assert_eq!(state.get_display_text(), "私は");
+    }
+
+    #[test]
+    fn test_candidate_change_after_segment_navigation_affects_only_target() {
+        let mut state = ImeState::new();
+        install_test_dictionary_conversion(&mut state);
+
+        assert!(state.move_to_next_dictionary_segment());
+
+        let selected = state.select_next_dictionary_candidate();
+
+        assert_eq!(selected, "派");
+        assert_eq!(state.get_display_text(), "私派");
+
+        let conversion = state.dictionary_conversion.as_ref().unwrap();
+
+        assert_eq!(
+            conversion.segments[0]
+                .selected_candidate()
+                .unwrap()
+                .surface,
+            "私"
+        );
+
+        assert_eq!(
+            conversion.segments[1]
+                .selected_candidate()
+                .unwrap()
+                .surface,
+            "派"
+        );
+    }
+
+    #[test]
+    fn test_dictionary_segment_navigation_without_conversion() {
+        let mut state = ImeState::new();
+
+        assert!(!state.move_to_next_dictionary_segment());
+        assert!(!state.move_to_previous_dictionary_segment());
+
+        assert_eq!(state.get_display_text(), "");
     }
 }

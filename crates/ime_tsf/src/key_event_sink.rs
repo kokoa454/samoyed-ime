@@ -95,8 +95,15 @@ impl KeyEventSink {
             ) {
                 return Some(action);
             }
-        }
 
+            // Viterbi変換中は、左右矢印を文節移動に割り当てる
+            if let Some(action) = route_dictionary_segment_navigation_key(
+                vk,
+                ime_state.has_dictionary_conversion(),
+            ) {
+                return Some(action);
+            }
+        }
         // モード遷移キーをチェック
         if let Some(action) = route_edit_key(vk, state.is_open, ime_state.has_active_input()) {
             if is_function_key(vk) && has_blocking_modifier() {
@@ -644,6 +651,34 @@ pub(crate) fn route_candidate_navigation_key(
     match vk {
         x if x == VK_UP.0 => Some(EditAction::MoveCandidatePrevious),
         x if x == VK_DOWN.0 => Some(EditAction::MoveCandidateNext),
+        _ => None,
+    }
+}
+
+/// Viterbi変換中に、左右矢印を文節移動アクションへ変換する。
+///
+/// 引数:
+/// * `vk`: Virtual Key code
+/// * `has_dictionary_conversion`: Viterbi変換中かどうか
+///
+/// 戻り値:
+/// * `Some(EditAction)`: 文節移動キーの場合
+/// * `None`: 文節移動キーではない場合
+pub(crate) fn route_dictionary_segment_navigation_key(
+    vk: u16,
+    has_dictionary_conversion: bool,
+) -> Option<EditAction> {
+    if !has_dictionary_conversion {
+        return None;
+    }
+
+    match vk {
+        x if x == VK_LEFT.0 => {
+            Some(EditAction::MoveDictionarySegmentPrevious)
+        }
+        x if x == VK_RIGHT.0 => {
+            Some(EditAction::MoveDictionarySegmentNext)
+        }
         _ => None,
     }
 }
@@ -1436,6 +1471,37 @@ mod tests {
                 false,
             ),
             EditAction::InputChar('G')
+        );
+    }
+
+    #[test]
+    fn test_dictionary_segment_navigation_key_routing() {
+        assert_eq!(
+            route_dictionary_segment_navigation_key(VK_LEFT.0, true),
+            Some(EditAction::MoveDictionarySegmentPrevious),
+        );
+
+        assert_eq!(
+            route_dictionary_segment_navigation_key(VK_RIGHT.0, true),
+            Some(EditAction::MoveDictionarySegmentNext),
+        );
+    }
+
+    #[test]
+    fn test_dictionary_segment_navigation_not_routed_without_conversion() {
+        assert_eq!(
+            route_dictionary_segment_navigation_key(VK_LEFT.0, false),
+            None,
+        );
+
+        assert_eq!(
+            route_dictionary_segment_navigation_key(VK_RIGHT.0, false),
+            None,
+        );
+
+        assert_eq!(
+            route_dictionary_segment_navigation_key(VK_UP.0, true),
+            None,
         );
     }
 }

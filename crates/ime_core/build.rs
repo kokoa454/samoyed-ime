@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::env;
 use std::fs;
-use std::io::{self, Write};
+use std::io::{self, BufRead, BufReader, BufWriter, Write};
 use std::path::PathBuf;
 
 
@@ -207,6 +207,33 @@ fn main() -> io::Result<()> {
         flat_entries.extend(candidates);
     }
 
+    // 連接コスト行列を生成し、辞書の文脈IDを検証する。
+    let connection_dimension = write_connection_costs(&dictionary_dir)?;
+
+    for (index, entry) in flat_entries.iter().enumerate() {
+        if usize::from(entry.left_id) >= connection_dimension {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "dictionary entry {index} has invalid left_id {} \
+                     (connection matrix dimension: {connection_dimension})",
+                    entry.left_id
+                ),
+            ));
+        }
+
+        if usize::from(entry.right_id) >= connection_dimension {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "dictionary entry {index} has invalid right_id {} \
+                     (connection matrix dimension: {connection_dimension})",
+                    entry.right_id
+                ),
+            ));
+        }
+    }
+
     let node_count = to_u32(serialized_nodes.len(), "Trie node count")?;
     let entry_count = to_u32(flat_entries.len(), "Dictionary entry count")?;
 
@@ -286,4 +313,144 @@ fn write_u16(output: &mut fs::File, value: u16) -> io::Result<()> {
 /// * `Err(io::Error)`: エラー発生時
 fn write_u32(output: &mut fs::File, value: u32) -> io::Result<()> {
     output.write_all(&value.to_le_bytes())
+}
+
+/// 連接コストのテキストを実行時用バイナリへ変換する。
+/// 
+/// 引数:
+/// * `dictionary_dir`: 辞書ディレクトリのパス
+/// 
+/// 戻り値:
+/// * `Ok(usize)`: 連接コスト行列の次元数
+/// * `Err(io::Error)`: エラー発生時
+fn write_connection_costs(dictionary_dir: &PathBuf) -> io::Result<usize> {
+    // id.defを読み込み、文脈IDの数を数える
+    let connection_path =
+        dictionary_dir.join("connection_single_column.txt");
+    let id_path = dictionary_dir.join("id.def");
+
+    println!(
+        "cargo:rerun-if-changed={}",
+        connection_path.display()
+    );
+    println!("cargo:rerun-if-changed={}", id_path.display());
+
+    // id.defの有効行数を数える
+    // 空行と、#で始まるコメント行は数えない
+    let id_file = fs::File::open(&id_path)?;
+    let id_reader = BufReader::new(id_file);
+    let mut id_count = 0usize;
+
+    for line in id_reader.lines() {
+        let line = line?;
+        let trimmed = line.trim();
+
+        if !trimmed.is_empty() && !trimmed.starts_with('#') {
+            id_count += 1;
+        }
+    }
+
+    // 連接コストファイルを開き、先頭行から行列の次元を取得
+    let connection_file = fs::File::open(&connection_path)?;
+    let mut reader = BufReader::new(connection_file);
+
+    let mut header = String::new();
+
+    if reader.read_line(&mut header)? == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "connection cost file is empty",
+        ));
+    }
+
+    let dimension: usize = header.trim().parse().map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "invalid connection cost matrix dimension",
+        )
+    })?;
+
+    if dimension == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "connection cost matrix dimension must not be zero",
+        ));
+    }
+
+    // 文脈IDの数と行列の次元が一致していることを確認
+    if dimension != id_count {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "connection cost dimension mismatch: matrix={dimension}, id.def={id_count}"
+            ),
+        ));
+    }
+
+    let expected_count = dimension.checked_mul(dimension).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "connection cost matrix size overflow",
+        )
+    })?;
+
+    let dimension_u32 = u32::try_from(dimension).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "connection cost matrix dimension exceeds u32",
+        )
+    })?;
+
+    // 出力ファイルを作成
+    let out_dir = PathBuf::from(
+        env::var_os("OUT_DIR").ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                "OUT_DIR is not set",
+            )
+        })?,
+    );
+
+    let output_path = out_dir.join("connection_costs.bin");
+    let output_file = fs::File::create(output_path)?;
+    let mut writer = BufWriter::new(output_file);
+
+    // ヘッダーを書き込む
+    writer.write_all(b"SMYCST01")?;
+    writer.write_all(&dimension_u32.to_le_bytes())?;
+
+    // コスト値を読み込み、u16のリトルエンディアン形式で保存
+    let mut actual_count = 0usize;
+
+    for (index, line) in reader.lines().enumerate() {
+        let line = line?;
+        let cost: u16 = line.trim().parse().map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("invalid connection cost at line {}", index + 2),
+            )
+        })?;
+
+        if actual_count >= expected_count {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("too many connection costs: expected {expected_count}"),
+            ));
+        }
+
+        writer.write_all(&cost.to_le_bytes())?;
+        actual_count += 1;
+    }
+
+    // コスト値の数が行列の次元と一致することを確認
+    if actual_count != expected_count {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("connection cost count mismatch: expected {expected_count}, actual {actual_count}"),
+        ));
+    }
+
+    writer.flush()?;
+
+    Ok(dimension)
 }

@@ -36,6 +36,8 @@ pub enum EditAction {
     MoveCandidatePrevious, // 前の変換候補へ移動
     MoveCandidateNext, // 次の変換候補へ移動
     StartTemporaryAscii(char), // 一時英字入力を開始
+    MoveDictionarySegmentPrevious, // 前の文節へ移動
+    MoveDictionarySegmentNext,     // 次の文節へ移動
 }
 
 /// Composition終了通知Sink
@@ -317,6 +319,26 @@ impl ITfEditSession_Impl for SamoyedIMEEditSession_Impl {
                         ec,
                         |ime_state| {
                             ime_state.select_next_dictionary_candidate();
+                        },
+                    )
+                }
+
+                // 前の文節へ移動
+                EditAction::MoveDictionarySegmentPrevious => {
+                    self.update_state_and_text(
+                        ec,
+                        |ime_state| {
+                            ime_state.move_to_previous_dictionary_segment();
+                        },
+                    )
+                }
+
+                // 次の文節へ移動
+                EditAction::MoveDictionarySegmentNext => {
+                    self.update_state_and_text(
+                        ec,
+                        |ime_state| {
+                            ime_state.move_to_next_dictionary_segment();
                         },
                     )
                 }
