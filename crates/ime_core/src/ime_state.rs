@@ -2696,4 +2696,606 @@ mod tests {
 
         assert_eq!(state.get_display_text(), "");
     }
+
+    // ============================================================
+    // 回帰テスト用ヘルパー
+    // ============================================================
+
+    /// ローマ字を入力し、Spaceで辞書変換した状態を取得する。
+    ///
+    /// 引数:
+    /// * romaji: 入力するローマ字
+    ///
+    /// 戻り値:
+    /// * ImeState: 変換操作後の状態
+    fn convert_romaji_for_regression(romaji: &str) -> ImeState {
+        let mut state = ImeState::new();
+
+        for ch in romaji.chars() {
+            state.input_char(ch);
+        }
+
+        state.input_space(false);
+
+        state
+    }
+
+    // ============================================================
+    // 文章変換の回帰テスト
+    // ============================================================
+
+    /// 実機で変換できた文章が、引き続き期待する結果になることを確認する。
+    #[test]
+    fn test_sentence_conversion_regression_cases() {
+        let cases = [
+            (
+                "nihongowobenkyousuru",
+                "日本語を勉強する",
+            ),
+            (
+                "kyouhaiitenkidesu",
+                "今日はいい天気です",
+            ),
+            (
+                "ashitatoukyouheikimasu",
+                "明日東京へ行きます",
+            ),
+            (
+                "watashihanihongowobenkyoushiteimasu",
+                "私は日本語を勉強しています",
+            ),
+            (
+                "iitoomouyo",
+                "いいと思うよ",
+            ),
+            (
+                "watashihasushigasukidesu",
+                "私は寿司が好きです",
+            ),
+        ];
+
+        for (romaji, expected) in cases {
+            let state = convert_romaji_for_regression(romaji);
+
+            assert_eq!(
+                state.get_display_text(),
+                expected,
+                "文章変換の結果が変わった: input='{}'",
+                romaji
+            );
+        }
+    }
+
+    /// 代表的な文章でViterbiによる変換結果が取得できることを確認する。
+    #[test]
+    fn test_sentence_conversion_produces_viterbi_result_regression() {
+        let cases = [
+            "nihongowobenkyousuru",
+            "kyouhaiitenkidesu",
+            "ashitatokyouheikimasu",
+            "watashihanihongowobenkyoushiteimasu",
+            "iitoomouyo",
+            "watashihasushigasukidesu",
+            "kinouhaamedadattakeredokyouhaharedesu",
+        ];
+
+        for romaji in cases {
+            let state = convert_romaji_for_regression(romaji);
+
+            assert!(
+                state.has_dictionary_conversion(),
+                "Viterbi変換が行われていない: input='{}'",
+                romaji
+            );
+
+            assert!(
+                !state.get_display_text().is_empty(),
+                "変換結果が空: input='{}'",
+                romaji
+            );
+        }
+    }
+
+    /// 変換前の読みが辞書変換状態に保持されることを確認する。
+    #[test]
+    fn test_sentence_conversion_preserves_original_reading_regression() {
+        let cases = [
+            ("nihongowobenkyousuru", "にほんごをべんきょうする"),
+            ("kyouhaiitenkidesu", "きょうはいいてんきです"),
+            ("ashitatoukyouheikimasu", "あしたとうきょうへいきます"),
+            (
+                "watashihanihongowobenkyoushiteimasu",
+                "わたしはにほんごをべんきょうしています",
+            ),
+            ("iitoomouyo", "いいとおもうよ"),
+            ("watashihasushigasukidesu", "わたしはすしがすきです"),
+        ];
+
+        for (romaji, expected_reading) in cases {
+            let state = convert_romaji_for_regression(romaji);
+
+            assert_eq!(
+                state.dictionary_reading.as_deref(),
+                Some(expected_reading),
+                "元の読みが保持されていない: input='{}'",
+                romaji
+            );
+        }
+    }
+
+    // ============================================================
+    // 文節解析の回帰テスト
+    // ============================================================
+
+    /// 文節の範囲が元の読みを漏れなく連続して覆っていることを確認する。
+    #[test]
+    fn test_sentence_conversion_segment_ranges_regression() {
+        let cases = [
+            "nihongowobenkyousuru",
+            "kyouhaiitenkidesu",
+            "ashitatokyouheikimasu",
+            "watashihanihongowobenkyoushiteimasu",
+            "iitoomouyo",
+            "watashihasushigasukidesu",
+            "kinouhaamedadattakeredokyouhaharedesu",
+        ];
+
+        for romaji in cases {
+            let state = convert_romaji_for_regression(romaji);
+
+            let reading = state
+                .dictionary_reading
+                .as_deref()
+                .expect("変換前の読みが存在すること");
+
+            let conversion = state
+                .dictionary_conversion
+                .as_ref()
+                .expect("Viterbi変換結果が存在すること");
+
+            let reading_chars: Vec<char> = reading.chars().collect();
+            let mut expected_start = 0;
+
+            assert!(
+                !conversion.segments.is_empty(),
+                "文節が存在しない: input='{}'",
+                romaji
+            );
+
+            for segment in &conversion.segments {
+                assert_eq!(
+                    segment.start,
+                    expected_start,
+                    "文節の範囲が連続していない: input='{}'",
+                    romaji
+                );
+
+                assert!(
+                    segment.start < segment.end,
+                    "文節の範囲が空、または不正: input='{}'",
+                    romaji
+                );
+
+                assert!(
+                    segment.end <= reading_chars.len(),
+                    "文節の終端が読みの長さを超えている: input='{}'",
+                    romaji
+                );
+
+                let expected_reading: String = reading_chars
+                    [segment.start..segment.end]
+                    .iter()
+                    .collect();
+
+                assert_eq!(
+                    segment.reading,
+                    expected_reading,
+                    "文節の読みが範囲と一致しない: input='{}'",
+                    romaji
+                );
+
+                assert!(
+                    !segment.candidates.is_empty(),
+                    "文節の候補が空: input='{}', segment='{}'",
+                    romaji,
+                    segment.reading
+                );
+
+                assert!(
+                    segment.selected_index < segment.candidates.len(),
+                    "選択中の候補インデックスが不正: input='{}'",
+                    romaji
+                );
+
+                expected_start = segment.end;
+            }
+
+            assert_eq!(
+                expected_start,
+                reading_chars.len(),
+                "文節が読み全体を覆っていない: input='{}'",
+                romaji
+            );
+        }
+    }
+
+    /// 各文節の選択候補を連結した結果が、表示文字列と一致することを確認する。
+    #[test]
+    fn test_sentence_surface_matches_display_regression() {
+        let cases = [
+            "nihongowobenkyousuru",
+            "kyouhaiitenkidesu",
+            "ashitatokyouheikimasu",
+            "watashihanihongowobenkyoushiteimasu",
+            "iitoomouyo",
+            "watashihasushigasukidesu",
+            "kinouhaamedadattakeredokyouhaharedesu",
+        ];
+
+        for romaji in cases {
+            let state = convert_romaji_for_regression(romaji);
+
+            let conversion = state
+                .dictionary_conversion
+                .as_ref()
+                .expect("Viterbi変換結果が存在すること");
+
+            assert_eq!(
+                state.get_display_text(),
+                conversion.surface(),
+                "表示文字列と選択中の文節候補が一致しない: input='{}'",
+                romaji
+            );
+        }
+    }
+
+    // ============================================================
+    // 同音異義語・候補生成の回帰テスト
+    // ============================================================
+
+    /// 「昨日」が長い文章のどこかの文節候補に含まれることを確認する。
+    ///
+    /// 先頭候補であることは要求しない。
+    /// 候補順位の改善時に既存仕様を誤って固定しないため。
+    #[test]
+    fn test_kinou_candidate_is_available_in_sentence_regression() {
+        let state = convert_romaji_for_regression(
+            "kinouhaamedadattakeredokyouhaharedesu",
+        );
+
+        let conversion = state
+            .dictionary_conversion
+            .as_ref()
+            .expect("Viterbi変換結果が存在すること");
+
+        let found = conversion
+            .segments
+            .iter()
+            .flat_map(|segment| segment.candidates.iter())
+            .any(|candidate| candidate.surface.contains("昨日"));
+
+        assert!(
+            found,
+            "「昨日」を含む候補が存在しない"
+        );
+    }
+
+    /// 候補を切り替えても、全文字列と文節の選択状態が整合することを確認する。
+    #[test]
+    fn test_sentence_candidate_navigation_consistency_regression() {
+        let mut state = convert_romaji_for_regression("kyouhaiitenkidesu");
+
+        assert!(state.has_dictionary_conversion());
+
+        let before = state.get_display_text();
+
+        assert!(
+            !state.get_dictionary_candidates().is_empty(),
+            "最初の文節に候補が存在すること"
+        );
+
+        state.select_next_dictionary_candidate();
+
+        let conversion = state
+            .dictionary_conversion
+            .as_ref()
+            .expect("候補切り替え後も変換結果が存在すること");
+
+        assert_eq!(
+            state.get_display_text(),
+            conversion.surface(),
+            "次候補の選択後、表示と変換結果が一致すること"
+        );
+
+        state.select_previous_dictionary_candidate();
+
+        let conversion = state
+            .dictionary_conversion
+            .as_ref()
+            .expect("前候補の選択後も変換結果が存在すること");
+
+        assert_eq!(
+            state.get_display_text(),
+            conversion.surface(),
+            "前候補の選択後、表示と変換結果が一致すること"
+        );
+
+        assert_eq!(
+            state.get_display_text(),
+            before,
+            "次候補、前候補の操作で元の候補へ戻ること"
+        );
+    }
+
+    // ============================================================
+    // 変換キャンセルの回帰テスト
+    // ============================================================
+
+    /// Esc相当の処理で元の読みと未変換状態を復元する。
+    #[test]
+    fn test_escape_cancel_restores_sentence_reading_regression() {
+        let cases = [
+            ("nihongowobenkyousuru", "にほんごをべんきょうする"),
+            ("kyouhaiitenkidesu", "きょうはいいてんきです"),
+            ("iitoomouyo", "いいとおもうよ"),
+        ];
+
+        for (romaji, expected_reading) in cases {
+            let mut state = convert_romaji_for_regression(romaji);
+
+            state.cancel_dictionary_conversion_and_restore_reading();
+
+            assert_eq!(
+                state.get_display_text(),
+                expected_reading,
+                "キャンセル後に元の読みへ戻らない: input='{}'",
+                romaji
+            );
+
+            assert!(!state.has_dictionary_conversion());
+            assert_eq!(state.get_dictionary_candidate_index(), None);
+            assert!(state.get_dictionary_candidates().is_empty());
+        }
+    }
+
+    /// 変換キャンセル後にもう一度変換できることを確認する。
+    #[test]
+    fn test_sentence_can_be_converted_again_after_cancel_regression() {
+        let mut state = ImeState::new();
+
+        for ch in "nihongowobenkyousuru".chars() {
+            state.input_char(ch);
+        }
+
+        state.input_space(false);
+        assert!(state.has_dictionary_conversion());
+
+        state.cancel_dictionary_conversion_and_restore_reading();
+
+        assert_eq!(
+            state.get_display_text(),
+            "にほんごをべんきょうする"
+        );
+
+        state.input_space(false);
+
+        assert!(
+            state.has_dictionary_conversion(),
+            "キャンセル後に再変換できること"
+        );
+
+        assert_eq!(
+            state.get_display_text(),
+            "日本語を勉強する"
+        );
+    }
+
+    // ============================================================
+    // Backspace・Delete・カーソル操作の回帰テスト
+    // ============================================================
+
+    /// 未変換ローマ字がある場合、Backspaceでpending入力を削除する。
+    #[test]
+    fn test_backspace_removes_pending_romaji_regression() {
+        let mut state = ImeState::new();
+
+        state.input_char('k');
+
+        assert!(state.has_pending_input());
+        assert_eq!(state.get_display_text(), "ｋ");
+
+        state.backspace();
+
+        assert!(!state.has_pending_input());
+        assert_eq!(state.get_display_text(), "");
+    }
+
+    /// カーソルが文字列の途中にある場合、Backspaceは左側の文字を削除する。
+    #[test]
+    fn test_backspace_at_middle_of_composition_regression() {
+        let mut state = ImeState::new();
+
+        for ch in "aiu".chars() {
+            state.input_char(ch);
+        }
+
+        assert_eq!(state.get_display_text(), "あいう");
+
+        state.move_cursor_left();
+
+        assert_eq!(state.get_cursor_pos(), 2);
+
+        state.backspace();
+
+        assert_eq!(
+            state.get_display_text(),
+            "あう",
+            "カーソルの左側の1文字だけ削除すること"
+        );
+        assert_eq!(state.get_cursor_pos(), 1);
+    }
+
+    /// カーソルが文字列の途中にある場合、Deleteは右側の文字を削除する。
+    #[test]
+    fn test_delete_at_middle_of_composition_regression() {
+        let mut state = ImeState::new();
+
+        for ch in "aiu".chars() {
+            state.input_char(ch);
+        }
+
+        state.move_cursor_left();
+
+        assert_eq!(state.get_cursor_pos(), 2);
+
+        state.delete();
+
+        assert_eq!(
+            state.get_display_text(),
+            "あい",
+            "カーソルの右側の1文字だけ削除すること"
+        );
+        assert_eq!(state.get_cursor_pos(), 2);
+    }
+
+    /// 文字列の先頭で左移動・Backspaceを実行しても状態が壊れないことを確認する。
+    #[test]
+    fn test_backspace_at_head_is_safe_regression() {
+        let mut state = ImeState::new();
+
+        for ch in "aiu".chars() {
+            state.input_char(ch);
+        }
+
+        state.move_cursor_to_head();
+
+        assert_eq!(state.get_cursor_pos(), 0);
+
+        state.move_cursor_left();
+        state.backspace();
+
+        assert_eq!(state.get_display_text(), "あいう");
+        assert_eq!(state.get_cursor_pos(), 0);
+    }
+
+    /// 文字列の末尾で右移動・Deleteを実行しても状態が壊れないことを確認する。
+    #[test]
+    fn test_delete_at_tail_is_safe_regression() {
+        let mut state = ImeState::new();
+
+        for ch in "aiu".chars() {
+            state.input_char(ch);
+        }
+
+        assert_eq!(state.get_cursor_pos(), 3);
+
+        state.move_cursor_right();
+        state.delete();
+
+        assert_eq!(state.get_display_text(), "あいう");
+        assert_eq!(state.get_cursor_pos(), 3);
+    }
+
+    /// 変換をBackspaceでキャンセルした後も入力を続けられることを確認する。
+    #[test]
+    fn test_input_continues_after_backspace_cancels_conversion_regression() {
+        let mut state = ImeState::new();
+
+        for ch in "nihongo".chars() {
+            state.input_char(ch);
+        }
+
+        state.input_space(false);
+        assert!(state.has_dictionary_conversion());
+
+        state.backspace();
+
+        assert_eq!(state.get_display_text(), "にほんご");
+        assert!(!state.has_dictionary_conversion());
+
+        for ch in "desu".chars() {
+            state.input_char(ch);
+        }
+
+        assert_eq!(
+            state.get_display_text(),
+            "にほんごです",
+            "キャンセル後の文字入力が正しく継続すること"
+        );
+    }
+
+    // ============================================================
+    // 多様な入力の基本不変条件
+    // ============================================================
+
+    /// さまざまなローマ字入力で表示文字列とカーソル位置が整合することを確認する。
+    #[test]
+    fn test_cursor_within_display_for_varied_romaji_regression() {
+        let inputs = [
+            "konnichiwa",
+            "gakkou",
+            "chotto",
+            "shinjuku",
+            "kyou",
+            "kinou",
+            "shinbun",
+            "ginkou",
+            "nihongo",
+            "benkyou",
+            "tokyo",
+            "watashi",
+            "sushi",
+            "sukidesu",
+            "arigatou",
+            "toukyou",
+            "ryokou",
+            "byouin",
+            "shigoto",
+            "densha",
+            "sensei",
+            "tomodachi",
+            "kippu",
+            "issho",
+            "qzx",
+        ];
+
+        for input in inputs {
+            let mut state = ImeState::new();
+
+            for ch in input.chars() {
+                state.input_char(ch);
+                assert_cursor_within_display(&state);
+            }
+
+            state.move_cursor_to_head();
+            assert_cursor_within_display(&state);
+
+            state.move_cursor_to_tail();
+            assert_cursor_within_display(&state);
+
+            state.backspace();
+            assert_cursor_within_display(&state);
+        }
+    }
+
+    /// 変換を確定・キャンセルした後、次の入力が可能であることを確認する。
+    #[test]
+    fn test_state_can_be_reused_after_clear_regression() {
+        let mut state = convert_romaji_for_regression("nihongo");
+
+        assert!(state.has_active_input());
+
+        state.clear();
+
+        assert_eq!(state.get_display_text(), "");
+        assert!(!state.has_active_input());
+        assert!(!state.has_dictionary_conversion());
+
+        for ch in "ai".chars() {
+            state.input_char(ch);
+        }
+
+        assert_eq!(state.get_display_text(), "あい");
+        assert_cursor_within_display(&state);
+    }
 }
