@@ -3,6 +3,10 @@ use crate::romaji_input::RomajiInput;
 use crate::romaji_table::ROMAJI_TABLE;
 
 
+const HIRAGANA_N: &str = "ん"; // 「ん」
+const HALF_ALPHANUMERIC_N: &str = "n"; // 「n」
+
+
 /// 半角英数字を全角英数字に変換する。
 ///
 /// 引数
@@ -246,8 +250,8 @@ pub fn romaji_to_hiragana(text: &str) -> String {
             result.push_str(&romaji_input.input(ch_lower));
         } else {
             let pending = romaji_input.get_pending_input();
-            if pending == "n" {
-                result.push('ん');
+            if pending == HALF_ALPHANUMERIC_N {
+                result.push_str(HIRAGANA_N);
             } else {
                 result.push_str(pending);
             }
@@ -257,8 +261,8 @@ pub fn romaji_to_hiragana(text: &str) -> String {
     }
 
     let pending = romaji_input.get_pending_input();
-    if pending == "n" {
-        result.push('ん');
+    if pending == HALF_ALPHANUMERIC_N {
+        result.push_str(HIRAGANA_N);
     } else {
         result.push_str(pending);
     }

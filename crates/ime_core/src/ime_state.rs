@@ -13,6 +13,14 @@ use crate::connection_costs::ConnectionCosts;
 use crate::kanji_converter::{KanjiConversionResult, KanjiConverter};
 
 
+const FULL_WIDTH_ZERO: char = '０'; // 全角の0
+const FULL_WIDTH_NINE: char = '９'; // 全角の9
+const HALF_WIDTH_SPACE: char = ' '; // 半角スペース
+const FULL_WIDTH_SPACE: char = '　'; // 全角スペース
+const HIRAGANA_N: &str = "ん"; // 「ん」
+const HALF_ALPHANUMERIC_N: &str = "n"; // 「n」
+
+
 /// 入力モード
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputMode {
@@ -157,8 +165,8 @@ impl ImeState {
         // 未変換ローマ字（pending）がある場合、解決してCompositionに取り込む
         if self.romaji_input.has_pending_input() {
             let pending = self.romaji_input.get_pending_input();
-            let resolved = if pending == "n" {
-                "ん".to_string()
+            let resolved = if pending == HALF_ALPHANUMERIC_N {
+                HIRAGANA_N.to_string()
             } else {
                 pending.to_string()
             };
@@ -214,7 +222,19 @@ impl ImeState {
                 let normalized = {
                     let full_width_kana = half_width_katakana_to_full_width_katakana(buf);
                     let hiragana = full_width_katakana_to_hiragana(&full_width_kana);
-                    half_width_alphanumeric_to_full_width_alphanumeric(&hiragana)
+                    let full_width = half_width_alphanumeric_to_full_width_alphanumeric(&hiragana);
+
+                    if self.input_mode == InputMode::FullWidthAlphanumeric {
+                        full_width
+                    } else {
+                        full_width
+                            .chars()
+                            .map(|ch| match ch {
+                                FULL_WIDTH_ZERO..=FULL_WIDTH_NINE => char::from_u32(ch as u32 - 0xFEE0).unwrap_or(ch),
+                                _ => ch,
+                            })
+                            .collect()
+                    }
                 };
 
                 let converted = match self.input_mode {
@@ -222,17 +242,16 @@ impl ImeState {
                     InputMode::FullWidthKatakana => hiragana_to_full_width_katakana(&normalized),
                     InputMode::HalfWidthKatakana => hiragana_to_half_width_katakana(&normalized),
                     InputMode::FullWidthAlphanumeric => normalized,
-                    InputMode::HalfWidthAlphanumeric => {
-                        full_width_alphanumeric_to_half_width_alphanumeric(&normalized)
-                    }
+                    InputMode::HalfWidthAlphanumeric => full_width_alphanumeric_to_half_width_alphanumeric(&normalized),
                 };
+
                 res.push_str(&converted);
                 buf.clear();
             }
         };
 
         for ch in text.chars() {
-            if ch == ' ' || ch == '　' {
+            if ch == HALF_WIDTH_SPACE || ch == FULL_WIDTH_SPACE {
                 flush_buf(&mut non_space_buf, &mut result);
                 result.push(ch);
             } else {
@@ -291,8 +310,8 @@ impl ImeState {
         // 未変換ローマ字が残っている場合は、先にCompositionへ反映
         if self.romaji_input.has_pending_input() {
             let pending = self.romaji_input.get_pending_input();
-            let resolved = if pending == "n" {
-                "ん".to_string()
+            let resolved = if pending == HALF_ALPHANUMERIC_N {
+                HIRAGANA_N.to_string()
             } else {
                 pending.to_string()
             };
@@ -509,8 +528,8 @@ impl ImeState {
         // 未変換ローマ字があれば解決してCompositionに追加
         if self.romaji_input.has_pending_input() {
             let pending = self.romaji_input.get_pending_input();
-            let resolved = if pending == "n" {
-                "ん".to_string()
+            let resolved = if pending == HALF_ALPHANUMERIC_N {
+                HIRAGANA_N.to_string()
             } else {
                 pending.to_string()
             };
@@ -601,7 +620,7 @@ impl ImeState {
             normally_full_width
         };
 
-        let ch = if is_full_width { '　' } else { ' ' };
+        let ch = if is_full_width { FULL_WIDTH_SPACE } else { HALF_WIDTH_SPACE };
         self.composition.insert(ch);
         ch.to_string()
     }
@@ -3377,5 +3396,39 @@ mod tests {
         }
 
         println!("\n========== 診断終了 ==========\n");
+    }
+
+    #[test]
+    fn test_digits_are_half_width_except_full_width_alphanumeric_mode() {
+        let modes = [
+            InputMode::Hiragana,
+            InputMode::FullWidthKatakana,
+            InputMode::HalfWidthKatakana,
+            InputMode::HalfWidthAlphanumeric,
+        ];
+
+        for mode in modes {
+            let mut state = ImeState::new();
+            state.set_input_mode(mode);
+
+            for ch in "123".chars() {
+                state.input_char(ch);
+            }
+
+            assert_eq!(
+                state.get_display_text(),
+                "123",
+                "数字は半角であること: mode={mode:?}",
+            );
+        }
+
+        let mut state = ImeState::new();
+        state.set_input_mode(InputMode::FullWidthAlphanumeric);
+
+        for ch in "123".chars() {
+            state.input_char(ch);
+        }
+
+        assert_eq!(state.get_display_text(), "１２３");
     }
 }

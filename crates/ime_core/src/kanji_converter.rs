@@ -1013,13 +1013,13 @@ mod tests {
             KanjiConverter::new(dictionary, &connection_costs);
 
         let result = converter
-            .convert("あしたは１０じにいきます")
+            .convert("あしたは10じにいきます")
             .expect("conversion should succeed with digits in the reading");
 
         let surface = result.surface();
 
         assert!(
-            surface.contains("１０"),
+            surface.contains("10"),
             "the original digits should be preserved: {surface}"
         );
         assert!(
