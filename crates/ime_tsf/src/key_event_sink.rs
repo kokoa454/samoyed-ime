@@ -522,6 +522,11 @@ fn vk_to_input_char(
 
     let mut ch = chars.next()?;
 
+    // Backspaceなどの制御文字は、通常の文字入力として扱わない。
+    if ch.is_control() {
+        return None;
+    }
+
     // 1回のキー入力で複数文字が返る場合は処理しない
     if chars.next().is_some() {
         return None;
@@ -1503,5 +1508,16 @@ mod tests {
             route_dictionary_segment_navigation_key(VK_UP.0, true),
             None,
         );
+    }
+
+    #[test]
+    fn test_control_characters_are_not_treated_as_text() {
+        assert!('\u{8}'.is_control()); // Backspace
+        assert!('\r'.is_control());   // Enter
+        assert!('\n'.is_control());   // 改行
+        assert!('\t'.is_control());   // Tab
+
+        assert!(!'a'.is_control());
+        assert!(!'1'.is_control());
     }
 }
