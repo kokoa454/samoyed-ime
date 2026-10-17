@@ -1,5 +1,5 @@
 use crate::dictionary::{DictEntry, Dictionary};
-
+use std::collections::HashMap;
 
 /// 単語間の連接コストを提供する。
 ///
@@ -122,13 +122,30 @@ impl<'a, C: ConnectionCostProvider> KanjiConverter<'a, C> {
 
     /// 読みをかな漢字変換する。
     ///
+    /// まず入力全体を通常のViterbi探索で変換する。
+    /// 経路が存在しない場合は、数字・記号などを保持して
+    /// 日本語部分を個別に変換する。
+    pub fn convert(
+        &self,
+        reading: &str,
+    ) -> Result<KanjiConversionResult, KanjiConversionError> {
+        match self.convert_contiguous(reading) {
+            Ok(result) => Ok(result),
+            Err(KanjiConversionError::NoPath) => {
+                self.convert_with_passthrough(reading)
+            }
+        }
+    }
+
+    /// 読みをかな漢字変換する（文節区切りなし）。
+    ///
     /// 引数
     /// * `reading`: 変換する文字列
     ///
     /// 戻り値
     /// * `KanjiConversionResult`: 変換結果
     /// * `KanjiConversionError::NoPath`: 変換結果が存在しない
-    pub fn convert(
+    fn convert_contiguous(
         &self,
         reading: &str,
     ) -> Result<KanjiConversionResult, KanjiConversionError> {
@@ -410,6 +427,201 @@ impl<'a, C: ConnectionCostProvider> KanjiConverter<'a, C> {
             segments,
             total_cost,
         })
+    }
+
+    /// 数字・記号などを保持しながら、文章を部分ごとに変換する
+fn convert_with_passthrough(
+    &self,
+    reading: &str,
+) -> Result<KanjiConversionResult, KanjiConversionError> {
+    if !reading.chars().any(Self::is_passthrough_char) {
+        return Err(KanjiConversionError::NoPath);
+    }
+
+    // UTF-8バイト位置と文字位置を両方保持する
+    // Stringのスライスはバイト位置、文節の範囲は文字位置を使う
+    let char_count = reading.chars().count();
+
+    // (保持する部分か, 開始バイト, 終了バイト, 開始文字位置, 終了文字位置)
+    let mut chunks: Vec<(bool, usize, usize, usize, usize)> =
+        Vec::new();
+
+    let first_char = reading
+        .chars()
+        .next()
+        .ok_or(KanjiConversionError::NoPath)?;
+
+    let mut chunk_byte_start = 0;
+    let mut chunk_char_start = 0;
+    let mut chunk_is_passthrough =
+        Self::is_passthrough_char(first_char);
+
+    for (char_index, (byte_index, ch)) in
+        reading.char_indices().enumerate().skip(1)
+    {
+        let is_passthrough = Self::is_passthrough_char(ch);
+
+        if is_passthrough != chunk_is_passthrough {
+            chunks.push((
+                chunk_is_passthrough,
+                chunk_byte_start,
+                byte_index,
+                chunk_char_start,
+                char_index,
+            ));
+
+            chunk_byte_start = byte_index;
+            chunk_char_start = char_index;
+            chunk_is_passthrough = is_passthrough;
+        }
+    }
+
+    chunks.push((
+        chunk_is_passthrough,
+        chunk_byte_start,
+        reading.len(),
+        chunk_char_start,
+        char_count,
+    ));
+
+    let mut segments = Vec::new();
+    let mut total_cost = 0_i64;
+
+    for (
+        is_passthrough,
+        byte_start,
+        byte_end,
+        char_start,
+        char_end,
+    ) in chunks
+    {
+        let chunk = &reading[byte_start..byte_end];
+
+        if is_passthrough {
+            // 保持する部分も、現在の結果型で出力できるように候補を1つ持つ文節として表現
+            // この文節はViterbiの接続計算には参加しない
+            segments.push(ConversionSegment {
+                reading: chunk.to_owned(),
+                start: char_start,
+                end: char_end,
+                candidates: vec![KanjiCandidate {
+                    surface: chunk.to_owned(),
+                    left_id: 0,
+                    right_id: 0,
+                    word_cost: 0,
+                    contextual_cost: 0,
+                }],
+                selected_index: 0,
+            });
+        } else {
+            // 日本語部分は、既存のViterbi探索を使う
+            let mut result = self.convert_contiguous(chunk)?;
+
+            if !Self::has_sufficient_lexical_coverage(chunk, &result) {
+                return Err(KanjiConversionError::NoPath);
+            }
+
+            total_cost = total_cost
+                .checked_add(result.total_cost)
+                .ok_or(KanjiConversionError::NoPath)?;
+
+            // 各部分のローカルな範囲を、元の文章の範囲に直す
+            for segment in &mut result.segments {
+                segment.start += char_start;
+                segment.end += char_start;
+            }
+
+            segments.extend(result.segments);
+        }
+    }
+
+    Ok(KanjiConversionResult {
+        reading: reading.to_owned(),
+        segments,
+        total_cost,
+    })
+}
+
+    /// 通常の辞書変換をせず、そのまま保持する文字を判定する。
+    ///
+    /// 引数:
+    /// * `ch`: 文字
+    ///
+    /// 戻り値:
+    /// * `bool`: `true` なら保持する、`false` なら変換する
+    fn is_passthrough_char(ch: char) -> bool {
+        ch.is_numeric()
+            || ch.is_whitespace()
+            || ch.is_ascii_punctuation()
+            || matches!(
+                ch as u32,
+                0x2000..=0x206F
+                    | 0x20A0..=0x20CF
+                    | 0x2100..=0x214F
+                    | 0x2190..=0x21FF
+                    | 0x2200..=0x22FF
+                    | 0x2300..=0x23FF
+                    | 0x2460..=0x24FF
+                    | 0x2500..=0x257F
+                    | 0x25A0..=0x25FF
+                    | 0x2600..=0x27BF
+                    | 0x2900..=0x297F
+                    | 0x2B00..=0x2BFF
+                    | 0x3000..=0x303F
+                    | 0xFE10..=0xFE1F
+                    | 0xFE30..=0xFE4F
+                    | 0xFF01..=0xFF0F
+                    | 0xFF1A..=0xFF20
+                    | 0xFF3B..=0xFF40
+                    | 0xFF5B..=0xFF65
+                    | 0x1F000..=0x1FAFF
+            )
+    }
+
+    /// フォールバック対象の文章に、複数文字の辞書候補が十分に含まれているかを判定する。
+    ///
+    /// 引数:
+    /// * `input`: 元の文章
+    /// * `result`: 変換結果
+    ///
+    /// 戻り値:
+    /// * `bool`: `true` なら十分なカバレッジがある、`false` なら不十分
+    fn has_sufficient_lexical_coverage(
+        input: &str,
+        result: &KanjiConversionResult,
+    ) -> bool {
+        let chars: Vec<char> = input.chars().collect();
+        let total_chars = chars.len();
+
+        // 長い同一文字の繰り返しを、辞書候補があるという理由だけで不自然に変換してしまうことを防ぐ
+        if total_chars >= 8 {
+            let mut counts = HashMap::<char, usize>::new();
+
+            for ch in &chars {
+                *counts.entry(*ch).or_default() += 1;
+            }
+
+            let max_count = counts.values().copied().max().unwrap_or(0);
+
+            // 1文字が全体の75%以上を占める場合は拒否する
+            if max_count.saturating_mul(4) >= total_chars.saturating_mul(3) {
+                return false;
+            }
+        }
+
+        // 1文字の入力は通常の辞書変換を妨げない
+        if total_chars <= 1 {
+            return true;
+        }
+
+        let multi_char_count: usize = result
+            .segments
+            .iter()
+            .filter(|segment| segment.reading.chars().count() >= 2)
+            .map(|segment| segment.reading.chars().count())
+            .sum();
+
+        multi_char_count.saturating_mul(2) >= total_chars
     }
 }
 
@@ -769,5 +981,58 @@ mod tests {
         let result = converter.convert(reading);
 
         println!("Viterbi変換結果: {result:#?}");
+    }
+
+    #[test]
+    fn preserves_exclamation_mark_when_converting() {
+        let dictionary = Dictionary::embedded();
+
+        let connection_costs =
+            crate::connection_costs::ConnectionCosts::embedded()
+                .expect("embedded connection costs must be valid");
+
+        let converter =
+            KanjiConverter::new(dictionary, &connection_costs);
+
+        let result = converter
+            .convert("にほんご！")
+            .expect("conversion should succeed with a trailing symbol");
+
+        assert_eq!(result.surface(), "日本語！");
+    }
+
+    #[test]
+    fn preserves_digits_inside_sentence_conversion() {
+        let dictionary = Dictionary::embedded();
+
+        let connection_costs =
+            crate::connection_costs::ConnectionCosts::embedded()
+                .expect("embedded connection costs must be valid");
+
+        let converter =
+            KanjiConverter::new(dictionary, &connection_costs);
+
+        let result = converter
+            .convert("あしたは１０じにいきます")
+            .expect("conversion should succeed with digits in the reading");
+
+        let surface = result.surface();
+
+        assert!(
+            surface.contains("１０"),
+            "the original digits should be preserved: {surface}"
+        );
+        assert!(
+            surface.contains("明日"),
+            "the Japanese part should still be converted: {surface}"
+        );
+        assert!(
+            surface.contains("時"),
+            "the Japanese part after the digits should still be converted: {surface}"
+        );
+        assert!(
+            surface.contains("行きます"),
+            "the sentence ending should still be converted: {surface}"
+        );
     }
 }
