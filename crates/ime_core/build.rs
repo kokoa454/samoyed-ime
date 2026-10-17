@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 
 /// 辞書ファイルのリスト
-const DICTIONARY_FILES: [&str; 10] = [
+const DICTIONARY_FILES: [&str; 11] = [
     "dictionary00.txt",
     "dictionary01.txt",
     "dictionary02.txt",
@@ -17,6 +17,7 @@ const DICTIONARY_FILES: [&str; 10] = [
     "dictionary07.txt",
     "dictionary08.txt",
     "dictionary09.txt",
+    "mozcdic-ut.txt",
 ];
 
 const INVALID_INDEX: u32 = u32::MAX;  // 無効なインデックス

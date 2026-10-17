@@ -1,93 +1,85 @@
 # Third-Party Notices
 
-本ソフトウェアには、Mozcの公開辞書データの一部を利用しています。辞書データは、各ライセンスおよび利用条件に従って使用・再配布しています。
+SamoyedIME は、第三者が提供する辞書データおよび関連データを利用しています。各データには、それぞれ異なるライセンス、著作権表示および利用条件が適用されます。SamoyedIME 自身のソースコードに適用されるライセンスが、これらのデータすべてに自動的に適用されるわけではありません。
+
+ライセンス本文と元の通知は `THIRD_PARTY_LICENSES/` に収録しています。以下は、このプロジェクトで報告された辞書構成に基づく出典一覧です。
 
 ## 1. Mozc Open Source Dictionary Data
 
-**Source:** https://github.com/google/mozc/tree/master/src/data/dictionary_oss
+**Source:** <https://github.com/google/mozc/tree/master/src/data/dictionary_oss>
 
-本ソフトウェアで使用している辞書データは、Mozcの `src/data/dictionary_oss/` に由来します。
+SamoyedIME は Mozc の `src/data/dictionary_oss/` に由来する辞書データを利用しています。Mozc の公式説明では、このディレクトリのライセンスは `Mixed` とされ、IPAdic、ICOT Free Software、沖縄辞書などの通知・条件を確認するよう案内されています。
 
-この辞書データには複数のライセンスが適用されます。詳細は、Mozc公式リポジトリの [`src/data/dictionary_oss/README.txt`](https://github.com/google/mozc/blob/master/src/data/dictionary_oss/README.txt) を参照してください。
+- 元の説明およびライセンス条件: `THIRD_PARTY_LICENSES/MOZC-DICTIONARY-OSS-README.txt`
+- 主な内容: IPAdic/ICOT Free Software の著作権表示、保証の否認、沖縄辞書の Public Domain に関する声明
 
-以下に、ライセンス条件および保証の否認に関する全文を掲載します。
+## 2. Mozc `id.def`
 
---------------------------------------------------------------------------------
-Copyright 2000, 2001, 2002, 2003 Nara Institute of Science
-and Technology.  All Rights Reserved.
+**Source:** <https://github.com/google/mozc/blob/master/src/data/dictionary_oss/id.def>
 
-Use, reproduction, and distribution of this software is permitted.
-Any copy of this software, whether in its original form or modified,
-must include both the above copyright notice and the following
-paragraphs.
+`id.def` は UT 辞書の生成処理で文脈 ID を更新するために使用されます。`merge-ut-dictionaries` のライセンス一覧では、このファイルについて BSD-3-Clause と明記されています。
 
-Nara Institute of Science and Technology (NAIST),
-the copyright holders, disclaims all warranties with regard to this
-software, including all implied warranties of merchantability and
-fitness, in no event shall NAIST be liable for
-any special, indirect or consequential damages or any damages
-whatsoever resulting from loss of use, data or profits, whether in an
-action of contract, negligence or other tortuous action, arising out
-of or in connection with the use or performance of this software.
+- License text: `THIRD_PARTY_LICENSES/BSD-3-Clause.txt`
 
-A large portion of the dictionary entries
-originate from ICOT Free Software.  The following conditions for ICOT
-Free Software applies to the current dictionary as well.
+注: `merge-ut-dictionaries` のライセンス一覧は、重複除去に使用する Mozc の `dictionary*.txt` についても BSD-3-Clause と記しています。一方、Mozc 自身の公式説明は `dictionary_oss/` 全体を `Mixed` としています。この通知では、Mozc の辞書データ自体については Mozc の元 README を保持し、`id.def` の BSD-3-Clause 表示を別に記録しています。
 
-Each User may also freely distribute the Program, whether in its
-original form or modified, to any third party or parties, PROVIDED
-that the provisions of Section 3 ("NO WARRANTY") will ALWAYS appear
-on, or be attached to, the Program, which is distributed substantially
-in the same form as set out herein and that such intended
-distribution, if actually made, will neither violate or otherwise
-contravene any of the laws and regulations of the countries having
-jurisdiction over the User or the intended distribution itself.
+## 3. Mozc UT Dictionary Data
 
-NO WARRANTY
+SamoyedIME は <https://github.com/utuhiro78/merge-ut-dictionaries> を用いて生成した `mozcdic-ut.txt` を追加辞書として利用しています。提示された `make.sh` の設定では、次の4辞書が有効です。
 
-The program was produced on an experimental basis in the course of the
-research and development conducted during the project and is provided
-to users as so produced on an experimental basis.  Accordingly, the
-program is provided without any warranty whatsoever, whether express,
-implied, statutory or otherwise.  The term "warranty" used herein
-includes, but is not limited to, any warranty of the quality,
-performance, merchantability and fitness for a particular purpose of
-the program and the nonexistence of any infringement or violation of
-any right of any third party.
+| 辞書 | 出典 | 通知・ライセンス |
+|---|---|---|
+| `mozcdic-ut-neologd` | <https://github.com/utuhiro78/mozcdic-ut-neologd> | `THIRD_PARTY_LICENSES/MOZCDIC-UT-NEOLOGD-LICENSE.txt` および元データの `MECAB-IPADIC-NEOLOGD-COPYING.txt` |
+| `mozcdic-ut-personal-names` | <https://github.com/utuhiro78/mozcdic-ut-personal-names> | Apache License 2.0。通知は `THIRD_PARTY_LICENSES/MOZCDIC-UT-PERSONAL-NAMES-LICENSE.txt`、本文は `THIRD_PARTY_LICENSES/APACHE-2.0.txt` |
+| `mozcdic-ut-place-names` | <https://github.com/utuhiro78/mozcdic-ut-place-names> | 上流プロジェクトは Public Domain と表示。`THIRD_PARTY_LICENSES/MOZCDIC-UT-PLACE-NAMES-LICENSE.txt` を参照 |
+| `mozcdic-ut-sudachidict` | <https://github.com/utuhiro78/mozcdic-ut-sudachidict> | Apache License 2.0。通知は `THIRD_PARTY_LICENSES/MOZCDIC-UT-SUDACHIDICT-LICENSE.txt`、元の `LEGAL` は `THIRD_PARTY_LICENSES/SUDACHIDICT-LEGAL.txt` |
 
-Each user of the program will agree and understand, and be deemed to
-have agreed and understood, that there is no warranty whatsoever for
-the program and, accordingly, the entire risk arising from or
-otherwise connected with the program is assumed by the user.
+`APACHE-2.0.txt` には Apache License 2.0 の全文を収録しています。SudachiDict の `LEGAL` には、SudachiDict 自身の Apache 2.0 表示に加え、UniDic および NEologd 由来データに関する追加の著作権表示・条件も含まれるため、同ファイルを別途保持しています。
 
-Therefore, neither ICOT, the copyright holder, or any other
-organization that participated in or was otherwise related to the
-development of the program and their respective officials, directors,
-officers and other employees shall be held liable for any and all
-damages, including, without limitation, general, special, incidental
-and consequential damages, arising out of or otherwise in connection
-with the use or inability to use the program or any product, material
-or result produced or otherwise obtained by using the program,
-regardless of whether they have been advised of, or otherwise had
-knowledge of, the possibility of such damages at any time during the
-project or thereafter.  Each user will be deemed to have agreed to the
-foregoing by his or her commencement of use of the program.  The term
-"use" as used herein includes, but is not limited to, the use,
-modification, copying and distribution of the program and the
-production of secondary products from the program.
+### NEologd の元データ
 
-In the case where the program, whether in its original form or
-modified, was distributed or delivered to or received by a user from
-any person, organization or entity other than ICOT, unless it makes or
-grants independently of ICOT any specific warranty to the user in
-writing, such person, organization or entity, will also be exempted
-from and not be held liable to the user for any such damages as noted
-above as far as the program is concerned.
+NEologd の元データに関する著作権表示、謝辞および利用条件は `THIRD_PARTY_LICENSES/MECAB-IPADIC-NEOLOGD-COPYING.txt` に収録しています。出典: <https://github.com/neologd/mecab-ipadic-NEologd/blob/master/COPYING>
 
--------------------------------------------------------------------------------
-Okinawa dictionary is licensed as follows
+### 地名辞書・日本郵便の郵便番号データ
 
-Public Domain Dataです。使用・変更・配布に関しては一切の制限をつけません。
-商品などに組み込むことも自由に行なってください。すでにいくつかの辞書には沖縄辞書が採用されています。
-勝手ながら、沖縄辞書に寄贈された辞書も in the Public Domain' 扱いとさせていただきます。
---------------------------------------------------------------------------------
+`mozcdic-ut-place-names` は日本郵便の郵便番号データを元に作成されたものです。同プロジェクトは「郵便番号データに限っては日本郵便株式会社は著作権を主張しません」と記しています。元の通知および公式の郵便番号データ案内は `THIRD_PARTY_LICENSES/MOZCDIC-UT-PLACE-NAMES-LICENSE.txt` を参照してください。
+
+## 4. 辞書統合ツール
+
+SamoyedIME は、[`merge-ut-dictionaries`](https://github.com/utuhiro78/merge-ut-dictionaries) を使用して生成した `mozcdic-ut.txt` を追加辞書として利用しています。
+
+生成には、次の4種類の辞書データを使用しています。
+
+- [mozcdic-ut-neologd](https://github.com/utuhiro78/mozcdic-ut-neologd)
+- [mozcdic-ut-personal-names](https://github.com/utuhiro78/mozcdic-ut-personal-names)
+- [mozcdic-ut-place-names](https://github.com/utuhiro78/mozcdic-ut-place-names)
+- [mozcdic-ut-sudachidict](https://github.com/utuhiro78/mozcdic-ut-sudachidict)
+
+辞書の生成には、Mozc の公開辞書データを重複エントリの除去に、`id.def` を文脈 ID の更新に使用しています。これらの出典と利用条件については、本書の該当するセクションを参照してください。
+
+本プロジェクトの辞書生成処理では、Wikipedia の記事名インデックスを利用した単語コスト調整を無効にしています。Wikipedia 由来の追加辞書も使用していません。
+
+生成された `mozcdic-ut.txt` は複数の辞書データを統合したものです。生成物全体に単一のライセンスが適用されると断定せず、各入力データに適用されるライセンスおよび利用条件に従って取り扱います。
+
+**辞書統合ツール:** https://github.com/utuhiro78/merge-ut-dictionaries
+
+**ソースコードのライセンス:** Apache License 2.0
+
+ライセンス本文および元データの著作権表示・利用条件は、`THIRD_PARTY_LICENSES/` に収録しています。
+
+## 5. 同梱文書
+
+このパッケージには次の文書が含まれます。
+
+- `THIRD_PARTY_LICENSES/APACHE-2.0.txt` — Apache License 2.0 全文
+- `THIRD_PARTY_LICENSES/BSD-3-Clause.txt` — BSD 3-Clause License 本文（Mozc `id.def` に関する上流表示に基づく）
+- `THIRD_PARTY_LICENSES/MOZC-DICTIONARY-OSS-README.txt` — Mozc 公開辞書の README と IPAdic/ICOT/沖縄辞書の通知
+- `THIRD_PARTY_LICENSES/MECAB-IPADIC-NEOLOGD-COPYING.txt` — NEologd の元データ通知
+- `THIRD_PARTY_LICENSES/MOZCDIC-UT-NEOLOGD-LICENSE.txt` — NEologd UT 辞書のライセンス参照
+- `THIRD_PARTY_LICENSES/MOZCDIC-UT-PERSONAL-NAMES-LICENSE.txt` — 人名 UT 辞書のライセンス参照
+- `THIRD_PARTY_LICENSES/MOZCDIC-UT-PLACE-NAMES-LICENSE.txt` — 地名 UT 辞書の Public Domain 通知
+- `THIRD_PARTY_LICENSES/MOZCDIC-UT-SUDACHIDICT-LICENSE.txt` — SudachiDict UT 辞書のライセンス参照
+- `THIRD_PARTY_LICENSES/SUDACHIDICT-LEGAL.txt` — SudachiDict の元の `LEGAL` 通知
+- `THIRD_PARTY_LICENSES/MERGE-UT-DICTIONARIES-LICENSE.txt` — UT 辞書統合ツールのライセンス一覧
+
+この通知は出典およびライセンス条件を整理するもので、個別ビルドの完全な入力履歴や、複合辞書に適用される法的結論を代替するものではありません。

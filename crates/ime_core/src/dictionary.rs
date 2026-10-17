@@ -632,6 +632,16 @@ mod tests {
     }
 
     #[test]
+    fn loads_embedded_ut_dictionary_entry() {
+        assert!(
+            Dictionary::embedded()
+                .lookup("あぁあのなつかしのしゅうぉっち")
+                .iter()
+                .any(|entry| entry.surface == "あぁあの懐かしのシュウォッチ")
+        );
+    }
+
+    #[test]
     fn rejects_invalid_dictionary_bytes() {
         assert!(matches!(
             Dictionary::from_bytes(b"XXXXXXXX"),

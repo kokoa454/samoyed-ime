@@ -3298,4 +3298,84 @@ mod tests {
         assert_eq!(state.get_display_text(), "あい");
         assert_cursor_within_display(&state);
     }
+
+    // ============================================================
+    // Viterbi変換経路の診断
+    // ============================================================
+
+    /// 長文変換について、文節・候補・コスト・選択結果を出力する。
+    ///
+    /// このテストは変換結果を診断するためのものであり、
+    /// 特定の候補が最上位であることは要求しない。
+    #[test]
+    fn diagnose_kinou_sentence_conversion() {
+        let reading = "きのうはあめだったけれどきょうははれです";
+
+        let connection_costs = ConnectionCosts::embedded()
+            .ok()
+            .expect("接続コストデータを読み込めること");
+
+        let converter =
+            KanjiConverter::new(Dictionary::embedded(), &connection_costs);
+
+        let result = converter
+            .convert(reading)
+            .ok()
+            .expect("文章のViterbi変換が成功すること");
+
+        println!("\n========== Viterbi診断 ==========");
+        println!("読み: {}", reading);
+        println!("変換結果: {}", result.surface());
+        println!("合計コスト: {}", result.total_cost);
+        println!("文節数: {}", result.segments.len());
+
+        for (segment_index, segment) in result.segments.iter().enumerate() {
+            let selected_surface = segment
+                .candidates
+                .get(segment.selected_index)
+                .map(|candidate| candidate.surface.as_str())
+                .unwrap_or("<invalid selected_index>");
+
+            println!(
+                "\n文節[{}]: reading='{}', range={}..{}",
+                segment_index,
+                segment.reading,
+                segment.start,
+                segment.end
+            );
+
+            println!(
+                "  選択候補: [{}] '{}'",
+                segment.selected_index,
+                selected_surface
+            );
+
+            println!("  候補数: {}", segment.candidates.len());
+
+            for (candidate_index, candidate) in
+                segment.candidates.iter().enumerate()
+            {
+                let marker = if candidate_index == segment.selected_index {
+                    ">"
+                } else {
+                    " "
+                };
+
+                println!(
+                    "  {} [{}] surface='{}', \
+                     word_cost={}, contextual_cost={}, \
+                     left_id={}, right_id={}",
+                    marker,
+                    candidate_index,
+                    candidate.surface,
+                    candidate.word_cost,
+                    candidate.contextual_cost,
+                    candidate.left_id,
+                    candidate.right_id
+                );
+            }
+        }
+
+        println!("\n========== 診断終了 ==========\n");
+    }
 }

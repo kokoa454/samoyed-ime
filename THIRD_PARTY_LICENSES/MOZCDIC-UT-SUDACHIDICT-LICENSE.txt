@@ -1,0 +1,11 @@
+mozcdic-ut-sudachidict - License notice
+
+Apache License, Version 2.0
+
+The full license text is included in APACHE-2.0.txt.
+Additional source-data notices from SudachiDict, including UniDic and
+NEologd attributions/conditions, are preserved in SUDACHIDICT-LEGAL.txt.
+
+Source:
+https://github.com/utuhiro78/mozcdic-ut-sudachidict
+https://github.com/WorksApplications/SudachiDict/blob/develop/LEGAL

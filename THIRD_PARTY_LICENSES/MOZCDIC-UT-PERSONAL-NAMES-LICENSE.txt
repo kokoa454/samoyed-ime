@@ -1,0 +1,8 @@
+mozcdic-ut-personal-names - License notice
+
+Apache License, Version 2.0
+
+The full license text is included in APACHE-2.0.txt.
+
+Source:
+https://github.com/utuhiro78/mozcdic-ut-personal-names

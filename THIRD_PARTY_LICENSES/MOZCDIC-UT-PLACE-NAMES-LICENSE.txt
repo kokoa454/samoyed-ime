@@ -1,0 +1,12 @@
+mozcdic-ut-place-names - License notice
+
+Public Domain
+
+The upstream project states:
+
+「郵便番号データに限っては日本郵便株式会社は著作権を主張しません。」
+
+Source:
+https://github.com/utuhiro78/mozcdic-ut-place-names
+Japan Post postal-code data notice:
+https://www.post.japanpost.jp/zipcode/dl/readme.html

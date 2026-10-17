@@ -1,0 +1,9 @@
+mozcdic-ut-neologd - License notice
+
+The upstream LICENSE points to the COPYING file of mecab-ipadic-NEologd.
+The upstream notice is preserved in:
+  MECAB-IPADIC-NEOLOGD-COPYING.txt
+
+Source:
+https://github.com/utuhiro78/mozcdic-ut-neologd
+https://github.com/neologd/mecab-ipadic-neologd/blob/master/COPYING
