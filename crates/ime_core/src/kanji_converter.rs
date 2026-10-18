@@ -129,6 +129,12 @@ impl<'a, C: ConnectionCostProvider> KanjiConverter<'a, C> {
         &self,
         reading: &str,
     ) -> Result<KanjiConversionResult, KanjiConversionError> {
+        // 数字を含む場合は、連続した数字をひとまとまりとして扱う
+        if reading.chars().any(|ch| ch.is_numeric()) {
+            return self.convert_with_passthrough(reading);
+        }
+
+        // 数字を含まない場合は、文章全体を変換
         match self.convert_contiguous(reading) {
             Ok(result) => Ok(result),
             Err(KanjiConversionError::NoPath) => {
@@ -1033,6 +1039,15 @@ mod tests {
         assert!(
             surface.contains("行きます"),
             "the sentence ending should still be converted: {surface}"
+        );
+        assert!(
+            result.segments.iter().any(|segment| segment.reading == "10"),
+            "連続する数字は1つの文節であること: {:?}",
+            result
+                .segments
+                .iter()
+                .map(|segment| segment.reading.as_str())
+                .collect::<Vec<_>>()
         );
     }
 }
