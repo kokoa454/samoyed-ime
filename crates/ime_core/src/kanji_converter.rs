@@ -122,25 +122,147 @@ impl<'a, C: ConnectionCostProvider> KanjiConverter<'a, C> {
 
     /// 読みをかな漢字変換する。
     ///
-    /// まず入力全体を通常のViterbi探索で変換する。
-    /// 経路が存在しない場合は、数字・記号などを保持して
-    /// 日本語部分を個別に変換する。
+    /// 引数
+    /// * `reading`: 変換する文字列
+    ///
+    /// 戻り値
+    /// * `KanjiConversionResult`: 変換結果
+    /// * `KanjiConversionError::NoPath`: 変換結果が存在しない
     pub fn convert(
         &self,
         reading: &str,
     ) -> Result<KanjiConversionResult, KanjiConversionError> {
-        // 数字を含む場合は、連続した数字をひとまとまりとして扱う
-        if reading.chars().any(|ch| ch.is_numeric()) {
-            return self.convert_with_passthrough(reading);
-        }
-
-        // 数字を含まない場合は、文章全体を変換
         match self.convert_contiguous(reading) {
             Ok(result) => Ok(result),
             Err(KanjiConversionError::NoPath) => {
                 self.convert_with_passthrough(reading)
             }
         }
+    }
+
+    /// 連続する数字の文節を1つに統合する。
+    /// 
+    /// 引数:
+    /// * `segments`: 文節のベクタ
+    /// 
+    /// 戻り値:
+    /// * `Result<Vec<ConversionSegment>, KanjiConversionError>`: 統合された文節のベクタ
+    fn merge_consecutive_numeric_segments(
+        &self,
+        segments: Vec<ConversionSegment>,
+    ) -> Result<Vec<ConversionSegment>, KanjiConversionError> {
+        let mut merged = Vec::with_capacity(segments.len());
+        let mut index = 0;
+
+        while index < segments.len() {
+            let segment = &segments[index];
+
+            let is_numeric = !segment.reading.is_empty()
+                && segment.reading.chars().all(|ch| ch.is_ascii_digit());
+
+            // 数字以外はそのまま残す
+            if !is_numeric {
+                merged.push(segment.clone());
+                index += 1;
+                continue;
+            }
+
+            // 連続する数字の範囲を探す
+            let group_start = index;
+            index += 1;
+
+            while index < segments.len() {
+                let previous = &segments[index - 1];
+                let current = &segments[index];
+
+                let current_is_numeric = !current.reading.is_empty()
+                    && current
+                        .reading
+                        .chars()
+                        .all(|ch| ch.is_ascii_digit());
+
+                if !current_is_numeric || previous.end != current.start {
+                    break;
+                }
+
+                index += 1;
+            }
+
+            let group = &segments[group_start..index];
+
+            // 1桁だけなら統合しない
+            if group.len() == 1 {
+                merged.push(group[0].clone());
+                continue;
+            }
+
+            let first_candidate = group[0]
+                .selected_candidate()
+                .ok_or(KanjiConversionError::NoPath)?;
+
+            let last_candidate = group
+                .last()
+                .and_then(|segment| segment.selected_candidate())
+                .ok_or(KanjiConversionError::NoPath)?;
+
+            // 各桁の単語コストと、数字間の接続コストを合算
+            let mut combined_word_cost = 0_i64;
+
+            for (i, segment) in group.iter().enumerate() {
+                let candidate = segment
+                    .selected_candidate()
+                    .ok_or(KanjiConversionError::NoPath)?;
+
+                if i > 0 {
+                    let previous_candidate = group[i - 1]
+                        .selected_candidate()
+                        .ok_or(KanjiConversionError::NoPath)?;
+
+                    let connection_cost = self
+                        .connection_costs
+                        .transition_cost(
+                            previous_candidate.right_id,
+                            candidate.left_id,
+                        )
+                        .ok_or(KanjiConversionError::NoPath)?;
+
+                    combined_word_cost = combined_word_cost
+                        .checked_add(i64::from(connection_cost))
+                        .ok_or(KanjiConversionError::NoPath)?;
+                }
+
+                combined_word_cost = combined_word_cost
+                    .checked_add(i64::from(candidate.word_cost))
+                    .ok_or(KanjiConversionError::NoPath)?;
+            }
+
+            let combined_word_cost = i32::try_from(combined_word_cost)
+                .map_err(|_| KanjiConversionError::NoPath)?;
+
+            // 元の数字をそのまま維持
+            let reading: String = group
+                .iter()
+                .map(|segment| segment.reading.as_str())
+                .collect();
+
+            let candidate = KanjiCandidate {
+                surface: reading.clone(),
+                left_id: first_candidate.left_id,
+                right_id: last_candidate.right_id,
+                word_cost: combined_word_cost,
+                contextual_cost: first_candidate.contextual_cost,
+            };
+
+            merged.push(ConversionSegment {
+                reading,
+                start: group[0].start,
+                end: group[group.len() - 1].end,
+                candidates: vec![candidate],
+                selected_index: 0,
+            });
+        }
+
+        Ok(merged)
     }
 
     /// 読みをかな漢字変換する（文節区切りなし）。
@@ -427,6 +549,8 @@ impl<'a, C: ConnectionCostProvider> KanjiConverter<'a, C> {
                 selected_index,
             });
         }
+
+        let segments = self.merge_consecutive_numeric_segments(segments)?;
 
         Ok(KanjiConversionResult {
             reading: reading.to_string(),
@@ -1049,5 +1173,119 @@ mod tests {
                 .map(|segment| segment.reading.as_str())
                 .collect::<Vec<_>>()
         );
+
+        let numeric_segments: Vec<&ConversionSegment> = result
+            .segments
+            .iter()
+            .filter(|segment| {
+                !segment.reading.is_empty()
+                    && segment.reading.chars().all(|ch| ch.is_ascii_digit())
+            })
+            .collect();
+
+        assert_eq!(
+            numeric_segments.len(),
+            1,
+            "連続数字は1つの文節になること"
+        );
+
+        assert_eq!(numeric_segments[0].reading, "10");
+
+        assert_eq!(
+            numeric_segments[0]
+                .selected_candidate()
+                .unwrap()
+                .surface,
+            "10"
+        );
+    }
+
+    #[test]
+    fn viterbi_merges_consecutive_digits_into_one_segment() {
+        let dictionary = Dictionary::embedded();
+
+        let connection_costs =
+            crate::connection_costs::ConnectionCosts::embedded()
+                .expect("connection costs should load");
+
+        let converter = KanjiConverter::new(
+            dictionary,
+            &connection_costs,
+        );
+
+        let reading = "あしたは10じにいきます";
+
+        // passthroughを経由せず、通常のViterbi探索を直接実行する。
+        let result = converter
+            .convert_contiguous(reading)
+            .expect("Viterbi conversion should succeed");
+
+        // 文節の読みを連結すると元の入力と一致する。
+        let joined_reading: String = result
+            .segments
+            .iter()
+            .map(|segment| segment.reading.as_str())
+            .collect();
+
+        assert_eq!(joined_reading, reading);
+
+        // 数字の文節は1つだけであること。
+        let numeric_segments: Vec<_> = result
+            .segments
+            .iter()
+            .filter(|segment| {
+                !segment.reading.is_empty()
+                    && segment.reading.chars().all(|ch| ch.is_ascii_digit())
+            })
+            .collect();
+
+        assert_eq!(numeric_segments.len(), 1);
+        assert_eq!(numeric_segments[0].reading, "10");
+
+        let numeric_segment = numeric_segments[0];
+
+        assert_eq!(numeric_segment.start, 4);
+        assert_eq!(numeric_segment.end, 6);
+
+        assert_eq!(
+            numeric_segment.selected_candidate().unwrap().surface,
+            "10"
+        );
+
+        // 文節の範囲が連続していること。
+        for pair in result.segments.windows(2) {
+            assert_eq!(pair[0].end, pair[1].start);
+        }
+
+        // 統合後の文節から再計算したコストと、
+        // Viterbi探索の総コストが一致すること。
+        let selected: Vec<_> = result
+            .segments
+            .iter()
+            .map(|segment| segment.selected_candidate().unwrap())
+            .collect();
+
+        let first = selected.first().unwrap();
+
+        let mut recomputed_cost =
+            i64::from(connection_costs.start_cost(first.left_id).unwrap())
+                + i64::from(first.word_cost);
+
+        for pair in selected.windows(2) {
+            let connection = connection_costs
+                .transition_cost(pair[0].right_id, pair[1].left_id)
+                .expect("connection should exist");
+
+            recomputed_cost += i64::from(connection);
+            recomputed_cost += i64::from(pair[1].word_cost);
+        }
+
+        let last = selected.last().unwrap();
+
+        recomputed_cost += i64::from(
+            connection_costs.end_cost(last.right_id).unwrap(),
+        );
+
+        assert_eq!(result.total_cost, recomputed_cost);
     }
 }
